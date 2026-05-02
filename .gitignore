@@ -1,0 +1,55 @@
+# --- Gradle ---
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# --- IDEA / Eclipse / VS Code ---
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.classpath
+.project
+.settings/
+.vscode/
+bin/
+
+# --- macOS / Windows / Linux мусор ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Логи ---
+logs/
+*.log
+
+# --- Демо-данные и среда выполнения ---
+demo/
+data-*/
+data/
+config-*.yaml
+*.keys
+*.keys.pub
+
+# Если хочешь сохранить ПРИМЕР конфига для пользователя — пиши его в
+# src/main/resources/config.yaml (он уже не подпадает под config-*.yaml).
+
+# --- Артефакты сборки и отчёты, которые не должны лететь в репозиторий ---
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+hs_err_pid*.log
+replay_pid*.log
+
+# --- RocksDB (если случайно создалась в корне) ---
+*.sst
+LOG
+LOCK
+CURRENT
+MANIFEST-*
+
+# --- JavaFX runtime (если когда-нибудь появятся локальные SDK) ---
+javafx-sdk*/

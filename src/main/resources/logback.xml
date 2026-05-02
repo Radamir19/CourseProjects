@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Конфиг логирования для JBlockStorage.
+
+  По умолчанию пишем в stdout с цветами и в файл logs/jblockstorage.log с
+  ротацией по 50 МБ (требование ТЗ п. 4.1.3.2). Файловый аппендер использует
+  RollingFileAppender с time-based политикой и size cap.
+
+  Уровни:
+    - наш код (ru.hse.jblockstorage)  — INFO по умолчанию, переопределяется системным
+      свойством -Dru.hse.jblockstorage.logLevel=DEBUG для отладки;
+    - io.netty                         — WARN (Netty шумный на DEBUG);
+    - org.rocksdb                      — WARN.
+-->
+<configuration>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{30} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/jblockstorage.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/jblockstorage.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="ru.hse.jblockstorage" level="${ru.hse.jblockstorage.logLevel:-INFO}"/>
+    <logger name="io.netty"             level="WARN"/>
+    <logger name="org.rocksdb"          level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
