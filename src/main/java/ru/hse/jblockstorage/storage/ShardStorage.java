@@ -5,9 +5,12 @@ import ru.hse.jblockstorage.crypto.CryptoUtils;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Локальное хранилище шардов на диске — файлы с именем = SHA-256 хеш в hex.
@@ -126,6 +129,30 @@ public final class ShardStorage {
     public boolean delete(String hashHex) throws IOException {
         validateHash(hashHex);
         return Files.deleteIfExists(pathFor(hashHex));
+    }
+
+    /**
+     * Перечисляет хеши всех шардов, хранящихся в этой директории.
+     * <p>
+     * Используется сборщиком мусора ({@code ShardGcService}, ТЗ п. 4.1.1.4.3),
+     * чтобы пройти по локальным файлам и сравнить со списком «живых» шардов
+     * из блокчейна. Возвращает только корректные имена (ровно 64 hex-символа);
+     * {@code .tmp}-файлы от прерванных записей пропускаются.
+     */
+    public List<String> list() throws IOException {
+        if (!Files.isDirectory(baseDir)) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        try (Stream<Path> stream = Files.list(baseDir)) {
+            stream.forEach(p -> {
+                String name = p.getFileName().toString();
+                if (HEX_HASH.matcher(name).matches()) {
+                    result.add(name);
+                }
+            });
+        }
+        return result;
     }
 
     /** Возвращает путь файла для данного хеша (в открытом виде — для тестов). */

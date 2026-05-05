@@ -2,6 +2,9 @@ package ru.hse.jblockstorage.app;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.hse.jblockstorage.network.BlockResponseMessage;
+import ru.hse.jblockstorage.network.BroadcastBlockMessage;
+import ru.hse.jblockstorage.network.GetBlockMessage;
 import ru.hse.jblockstorage.network.GetShardMessage;
 import ru.hse.jblockstorage.network.HandshakeMessage;
 import ru.hse.jblockstorage.network.Message;
@@ -31,13 +34,16 @@ import java.util.Objects;
  *       upload-а, если он есть);</li>
  *   <li>{@link ShardResponseMessage} → {@link FileDownloader#handleShardResponse}
  *       (для текущего download-а).</li>
+ *   <li>{@link GetBlockMessage}, {@link BlockResponseMessage},
+ *       {@link BroadcastBlockMessage} → {@link BlockSyncService}
+ *       (синхронизация блокчейна между узлами; день 8).</li>
  * </ul>
  *
  * <h3>Опциональные компоненты</h3>
- * Uploader/downloader/storage могут быть {@code null} — это нормально для узлов,
- * которые не выполняют соответствующую роль (например, daemon-узел только
- * хранит шарды, не загружает свои файлы; transient-клиент наоборот, не хранит
- * чужие). Соответствующие сообщения молча игнорируются.
+ * Uploader/downloader/storage/blockSync могут быть {@code null} — это нормально
+ * для узлов, которые не выполняют соответствующую роль (например, daemon-узел
+ * только хранит шарды, не загружает свои файлы; transient-клиент наоборот, не
+ * хранит чужие). Соответствующие сообщения молча игнорируются.
  *
  * <h3>Lifecycle колбэков</h3>
  * {@link #onConnected}, {@link #onDisconnected}, {@link #onError} проксируются
@@ -55,15 +61,26 @@ public final class MessageRouter implements MessageHandler {
     private final StorageNodeService storageService;   // может быть null
     private final FileUploader uploader;                // может быть null
     private final FileDownloader downloader;            // может быть null
+    private final BlockSyncService blockSync;           // может быть null
 
     public MessageRouter(PeerManager peerManager,
                          StorageNodeService storageService,
                          FileUploader uploader,
-                         FileDownloader downloader) {
+                         FileDownloader downloader,
+                         BlockSyncService blockSync) {
         this.peerManager = Objects.requireNonNull(peerManager, "peerManager");
         this.storageService = storageService;
         this.uploader = uploader;
         this.downloader = downloader;
+        this.blockSync = blockSync;
+    }
+
+    /** Совместимый с днём 7 конструктор без BlockSyncService — для старых тестов. */
+    public MessageRouter(PeerManager peerManager,
+                         StorageNodeService storageService,
+                         FileUploader uploader,
+                         FileDownloader downloader) {
+        this(peerManager, storageService, uploader, downloader, null);
     }
 
     @Override
@@ -138,8 +155,27 @@ public final class MessageRouter implements MessageHandler {
             return;
         }
 
-        // 5. Прочее (Get/BlockResponse/BroadcastTx/BroadcastBlock) — пока не обрабатываем.
-        // Это будет добавлено позже, при реализации синхронизации блокчейна.
+        // 5. Синхронизация блокчейна (день 8).
+        if (message instanceof GetBlockMessage getBlock) {
+            if (blockSync != null) {
+                blockSync.handleGetBlock(peer, getBlock);
+            }
+            return;
+        }
+        if (message instanceof BlockResponseMessage blockResp) {
+            if (blockSync != null) {
+                blockSync.handleBlockResponse(peer, blockResp);
+            }
+            return;
+        }
+        if (message instanceof BroadcastBlockMessage bcast) {
+            if (blockSync != null) {
+                blockSync.handleBroadcastBlock(peer, bcast);
+            }
+            return;
+        }
+
+        // 6. Прочее (BroadcastTx и т.п.) — пока не обрабатываем.
         LOG.debug("Сообщение типа {} не обработано — нет соответствующего получателя",
                 message.getClass().getSimpleName());
     }

@@ -78,10 +78,14 @@ public final class Main {
 
         switch (command) {
             case "generate-keys" -> runGenerateKeys(args);
+            case "restore"       -> runRestore(args);
             case "start-node"    -> runStartNode(args);
             case "upload"        -> runUpload(args);
             case "download"      -> runDownload(args);
             case "list"          -> runList(args);
+            case "share"         -> runShare(args);
+            case "delete"        -> runDelete(args);
+            case "list-shared"   -> runListShared(args);
             default -> throw new UsageException("Неизвестная команда: " + command);
         }
     }
@@ -92,16 +96,37 @@ public final class Main {
 
     private static void runGenerateKeys(SimpleArgs args) throws IOException {
         Path output = Path.of(args.require("output"));
-        char[] password = readPassword(args, "password");
+        boolean useMnemonic = "true".equals(args.getOrDefault("mnemonic", "false"));
 
-        KeyPair pair = KeyManager.generateRsaKeyPair();
         // Создаём родительские директории, если нужно.
         Path parent = output.toAbsolutePath().getParent();
         if (parent != null) Files.createDirectories(parent);
 
+        char[] password;
+        String mnemonic = null;
+        if (useMnemonic) {
+            mnemonic = ru.hse.jblockstorage.crypto.Bip39.generateMnemonic12();
+            password = ru.hse.jblockstorage.crypto.Bip39.mnemonicToKeystorePassword(mnemonic);
+        } else {
+            password = readPassword(args, "password");
+            // День 11: ТЗ п. 4.1.2 (Таблица 1) — пароль ключа ≥ 8 символов.
+            // Mnemonic-derived пароль (64-символьный hex) проверке не подвергаем,
+            // он гарантированно длиннее.
+            try {
+                KeyManager.validatePassword(password);
+            } catch (IllegalArgumentException e) {
+                java.util.Arrays.fill(password, '\0');
+                throw new UsageException(e.getMessage());
+            }
+        }
+
+        KeyPair pair = KeyManager.generateRsaKeyPair();
         KeyManager.saveEncryptedPrivateKey(pair.getPrivate(), output, password);
         Path pubFile = Path.of(output.toString() + ".pub");
         KeyManager.savePublicKey(pair.getPublic(), pubFile);
+
+        // Затираем пароль из памяти.
+        java.util.Arrays.fill(password, '\0');
 
         // Прозрачно показываем пользователю свой публичный ключ — он же
         // и есть его «адрес» в сети. Удобно при шаринге доступа.
@@ -111,6 +136,73 @@ public final class Main {
         System.out.println();
         System.out.println("Ваш Public Key (Node ID):");
         System.out.println("  " + KeyManager.publicKeyToBase64(pair.getPublic()));
+
+        if (mnemonic != null) {
+            System.out.println();
+            System.out.println("=".repeat(72));
+            System.out.println("СОХРАНИТЕ СЛЕДУЮЩУЮ SEED-ФРАЗУ В НАДЁЖНОМ МЕСТЕ.");
+            System.out.println("Это ЕДИНСТВЕННЫЙ способ восстановить доступ при потере keystore.");
+            System.out.println("Никому её не показывайте. Лист бумаги — ваш лучший друг.");
+            System.out.println("=".repeat(72));
+            System.out.println();
+            // Выводим в формате "1. word1\n2. word2\n..." для удобства записи.
+            String[] words = mnemonic.split(" ");
+            for (int i = 0; i < words.length; i++) {
+                System.out.printf("  %2d. %s%n", i + 1, words[i]);
+            }
+            System.out.println();
+            System.out.println("Для восстановления используйте команду 'restore'.");
+        }
+    }
+
+    private static void runRestore(SimpleArgs args) throws Exception {
+        // Восстановление keystore по seed-фразе. Работает так:
+        // 1. Пользователь вводит mnemonic → derive того же password.
+        // 2. Расшифровываем keystore этим паролем.
+        // 3. Если keystore валиден — выводим успех. Если нет (mnemonic неверный)
+        //    — KeyManager.loadEncryptedPrivateKey бросит исключение из-за
+        //    неудавшейся GCM-проверки.
+        Path keystoreFile = Path.of(args.require("keys"));
+        String mnemonic = args.require("mnemonic");
+
+        if (!ru.hse.jblockstorage.crypto.Bip39.isValidMnemonic(mnemonic)) {
+            throw new IllegalArgumentException(
+                    "Введённая seed-фраза не проходит проверку BIP-39 (неверная контрольная сумма?)");
+        }
+
+        char[] password = ru.hse.jblockstorage.crypto.Bip39.mnemonicToKeystorePassword(mnemonic);
+        try {
+            // Пробуем расшифровать — если получится, значит фраза правильная
+            // и привязана к этому keystore.
+            java.security.PrivateKey priv = KeyManager.loadEncryptedPrivateKey(keystoreFile, password);
+            Path pubFile = Path.of(keystoreFile.toString() + ".pub");
+            if (Files.isRegularFile(pubFile)) {
+                java.security.PublicKey pub = KeyManager.loadPublicKey(pubFile);
+                System.out.println("Keystore успешно расшифрован.");
+                System.out.println("Ваш Public Key (Node ID):");
+                System.out.println("  " + KeyManager.publicKeyToBase64(pub));
+            } else {
+                System.out.println("Keystore расшифрован успешно.");
+                System.out.println("Внимание: соседний .pub файл не найден — если он утерян,");
+                System.out.println("публичный ключ будет нужно восстановить из приватного отдельной утилитой.");
+            }
+            // Просто проверка — реальное использование keystore идёт через
+            // start-node с тем же паролем (мы тут не сохраняем нигде,
+            // потому что keystore УЖЕ хранит зашифрованный priv).
+            // Но мы можем рекомендовать пользователю положить mnemonic как
+            // keysPassword в config? Нет, это бы упростило MITM. Восстановление
+            // должно требовать ввода mnemonic при каждом start.
+            // Чтобы не блокировать пользователя, выводим подсказку:
+            System.out.println();
+            System.out.println("Для запуска узла с этим ключом используйте:");
+            System.out.println("  jbs start-node --config=<config.yaml> --keys=" + keystoreFile);
+            System.out.println("(пароль будет запрошен — введите вашу seed-фразу через --password='<вся фраза>')");
+
+            // Используем priv чтобы не было unused-предупреждения.
+            assert priv != null;
+        } finally {
+            java.util.Arrays.fill(password, '\0');
+        }
     }
 
     private static void runStartNode(SimpleArgs args) throws Exception {
@@ -251,6 +343,93 @@ public final class Main {
         }
     }
 
+    private static void runShare(SimpleArgs args) throws Exception {
+        NodeConfig config = loadConfig(args);
+        KeyPair keys = loadKeys(args, config);
+        String txId = args.require("tx-id");
+        String recipient = args.require("recipient");
+        int waitSec = Integer.parseInt(args.getOrDefault(
+                "connect-wait-seconds", String.valueOf(DEFAULT_CONNECT_WAIT_SECONDS)));
+
+        try (NodeApplication app = NodeApplication.builder()
+                .config(config)
+                .keys(keys)
+                .build()) {
+            app.start();
+            // Для share нужны пиры — иначе ACL не дойдёт до recipient'а онлайн.
+            // Без пиров операция всё равно проходит локально (ACL попадает в наш
+            // блокчейн), но мы предупреждаем пользователя.
+            if (!waitForPeers(app, 1, waitSec)) {
+                System.out.println("ВНИМАНИЕ: за " + waitSec + " сек. ни один пир не подключился.");
+                System.out.println("ACL запишется в локальный блокчейн, но не разойдётся по сети.");
+            }
+
+            Transaction acl = app.shareFile(txId, recipient);
+            System.out.println();
+            System.out.println("Доступ предоставлен.");
+            System.out.println("ACL Transaction ID: " + acl.getId());
+            System.out.println("Файл:               " + truncate(txId, 16) + "…");
+            System.out.println("Получатель:         " + truncate(recipient, 24) + "…");
+        }
+    }
+
+    private static void runDelete(SimpleArgs args) throws Exception {
+        NodeConfig config = loadConfig(args);
+        KeyPair keys = loadKeys(args, config);
+        String txId = args.require("tx-id");
+        int waitSec = Integer.parseInt(args.getOrDefault(
+                "connect-wait-seconds", String.valueOf(DEFAULT_CONNECT_WAIT_SECONDS)));
+
+        try (NodeApplication app = NodeApplication.builder()
+                .config(config)
+                .keys(keys)
+                .build()) {
+            app.start();
+            // Аналогично share — без пиров DELETE всё равно записывается локально.
+            if (!waitForPeers(app, 1, waitSec)) {
+                System.out.println("ВНИМАНИЕ: за " + waitSec + " сек. ни один пир не подключился.");
+                System.out.println("DELETE запишется в локальный блокчейн, но не разойдётся.");
+            }
+
+            Transaction del = app.deleteFile(txId);
+            System.out.println();
+            System.out.println("Файл помечен как удалённый.");
+            System.out.println("DELETE Transaction ID: " + del.getId());
+            System.out.println("Удалён файл:           " + truncate(txId, 16) + "…");
+            System.out.println();
+            System.out.println("Замечание: физического удаления шардов с узлов-хранителей");
+            System.out.println("не происходит — это задача отдельного процесса GC (ТЗ 4.1.1.4.3).");
+        }
+    }
+
+    private static void runListShared(SimpleArgs args) throws Exception {
+        NodeConfig config = loadConfig(args);
+        KeyPair keys = loadKeys(args, config);
+
+        // Аналогично runList — сеть не открываем, читаем локальный блокчейн.
+        try (NodeApplication app = NodeApplication.builder()
+                .config(config)
+                .keys(keys)
+                .build()) {
+            String myKey = KeyManager.publicKeyToBase64(keys.getPublic());
+            List<Transaction> shared = app.blockchain().listByRecipient(myKey);
+            if (shared.isEmpty()) {
+                System.out.println("Никто пока не расшарил с вами файлов.");
+                return;
+            }
+            System.out.printf("%-66s %-32s %12s %-30s%n",
+                    "Transaction ID", "File name", "Size (bytes)", "Owner (short)");
+            System.out.println("-".repeat(140));
+            for (Transaction tx : shared) {
+                System.out.printf("%-66s %-32s %12d %-30s%n",
+                        tx.getId(),
+                        truncate(tx.getFileName(), 32),
+                        tx.getFileSize(),
+                        truncate(tx.getOwnerPublicKey(), 30));
+            }
+        }
+    }
+
     // ---------------------------------------------------------------
     // Утилиты
     // ---------------------------------------------------------------
@@ -337,9 +516,15 @@ public final class Main {
               jblockstorage <команда> [параметры]
 
             Команды:
-              generate-keys --output=<file> [--password=<pwd>]
+              generate-keys --output=<file> [--password=<pwd>] [--mnemonic]
                   Сгенерировать новую пару ключей RSA-2048.
                   Создаст <file> (зашифрованный приватный) и <file>.pub (публичный).
+                  --mnemonic — генерирует 12-словную seed-фразу BIP-39 как
+                  пароль; печатает её. Сохраните фразу для восстановления!
+
+              restore --keys=<file> --mnemonic="<12 слов через пробел>"
+                  Проверить, что seed-фраза подходит к указанному keystore-файлу
+                  (для случая «забыл пароль, но фраза сохранена»).
 
               start-node --config=<config.yaml> [--keys=<keysFile>]
                   Запустить узел в режиме демона. Блокируется до Ctrl+C.
@@ -355,6 +540,18 @@ public final class Main {
 
               list --config=<config.yaml>
                   Вывести список файлов, загруженных текущим пользователем.
+
+              share --config=<config.yaml> --tx-id=<id> --recipient=<recipient-public-key-base64>
+                  Предоставить пользователю с указанным публичным ключом
+                  доступ к файлу (ACL транзакция, ТЗ 4.1.1.3.2).
+
+              delete --config=<config.yaml> --tx-id=<id>
+                  Логически удалить файл (DELETE транзакция, ТЗ 4.1.1.4.3).
+                  Физически шарды на узлах-хранителях не стираются.
+
+              list-shared --config=<config.yaml>
+                  Вывести список файлов, расшаренных другими пользователями
+                  для текущего пользователя через ACL.
 
             Опции:
               --keys=<file>       Перебить keysFile из конфига.

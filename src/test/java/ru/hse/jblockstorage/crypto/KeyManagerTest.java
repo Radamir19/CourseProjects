@@ -69,4 +69,24 @@ class KeyManagerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> KeyManager.publicKeyFromBase64("not-a-real-key"));
     }
+
+    @Test
+    void validatePasswordAcceptsAtLeast8Chars() {
+        // ТЗ п. 4.1.2 (Таблица 1): пароль ключа — длина от 8 символов.
+        // Граничные случаи: 8 — ок, 7 — нет.
+        KeyManager.validatePassword("12345678".toCharArray());
+        KeyManager.validatePassword("a-very-very-long-passphrase".toCharArray());
+    }
+
+    @Test
+    void validatePasswordRejectsShortAndNullPasswords() {
+        assertThrows(IllegalArgumentException.class,
+                () -> KeyManager.validatePassword("short".toCharArray()));
+        assertThrows(IllegalArgumentException.class,
+                () -> KeyManager.validatePassword("1234567".toCharArray()));
+        assertThrows(IllegalArgumentException.class,
+                () -> KeyManager.validatePassword(new char[0]));
+        assertThrows(IllegalArgumentException.class,
+                () -> KeyManager.validatePassword(null));
+    }
 }

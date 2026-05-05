@@ -191,10 +191,13 @@ public final class FileUploader {
     /**
      * Рассылает все шарды каждому из выбранных хранителей и собирает receipts.
      * Возвращает все полученные receipts (один на (storer, shard) пару).
+     * <p>
+     * Метод пакет-приватный — переиспользуется в {@code RepairService}
+     * для повторной репликации (день 10).
      */
-    private List<StorageReceipt> pushShardsToStorers(List<StorerHandle> storers,
-                                                     String preliminaryTxId,
-                                                     List<Shard> shards)
+    List<StorageReceipt> pushShardsToStorers(List<StorerHandle> storers,
+                                             String preliminaryTxId,
+                                             List<Shard> shards)
             throws InterruptedException, TimeoutException {
         List<StorageReceipt> receipts = new ArrayList<>();
 
@@ -253,6 +256,167 @@ public final class FileUploader {
         if (future == null) return false;
         future.complete(ack);
         return true;
+    }
+
+    // ================================================================
+    // День 9: ACL — предоставление доступа другому пользователю
+    // ================================================================
+
+    /**
+     * Создаёт ACL-транзакцию: даёт recipient'у право скачать файл
+     * {@code originalTxId}.
+     * <p>
+     * Алгоритм:
+     * <ol>
+     *   <li>Найти оригинальную UPLOAD-транзакцию в блокчейне.</li>
+     *   <li>Убедиться, что мы её владелец (иначе — отказ, никто чужие
+     *       файлы шарить не может).</li>
+     *   <li>Расшифровать её AES-ключ нашим приватным ключом (RSA-OAEP).</li>
+     *   <li>Перешифровать тот же AES-ключ под публичным ключом recipient'а
+     *       (RSA-OAEP).</li>
+     *   <li>Сформировать ACL-транзакцию через {@link Transaction#newAcl},
+     *       подписать своим приватным ключом, добавить в блокчейн.</li>
+     * </ol>
+     *
+     * <h3>Обоснование</h3>
+     * Это закрывает ТЗ п. 4.1.1.3.2 «Управление доступом (ACL TX): возможность
+     * отправки транзакции, предоставляющей право на скачивание файла
+     * (расшифровку ключа) другому пользователю». Тривиальное расширение
+     * существующей RSA-OAEP инфраструктуры дня 6 — тот же AES-ключ просто
+     * шифруется под двух разных получателей.
+     *
+     * @return ACL-транзакция, уже добавленная в локальный блокчейн
+     * @throws IllegalArgumentException если оригинальной TX нет в цепи или
+     *                                  если она принадлежит не нам
+     */
+    public Transaction shareFile(String originalTxId, String recipientPublicKeyB64) {
+        Objects.requireNonNull(originalTxId, "originalTxId");
+        Objects.requireNonNull(recipientPublicKeyB64, "recipientPublicKeyB64");
+
+        Transaction original = blockchain.findByTxId(originalTxId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Транзакция " + originalTxId + " не найдена в блокчейне"));
+
+        if (original.getKind() != Transaction.Kind.UPLOAD) {
+            throw new IllegalArgumentException(
+                    "Можно расшаривать только UPLOAD-транзакции, а у этой kind="
+                            + original.getKind());
+        }
+        if (!ownerPublicKeyBase64.equals(original.getOwnerPublicKey())) {
+            throw new IllegalArgumentException(
+                    "Расшаривать чужой файл нельзя: владелец TX — другой пользователь");
+        }
+        if (blockchain.isDeleted(originalTxId)) {
+            throw new IllegalArgumentException(
+                    "Файл удалён, расшаривать нечего");
+        }
+        if (recipientPublicKeyB64.equals(ownerPublicKeyBase64)) {
+            throw new IllegalArgumentException(
+                    "Расшаривать самому себе бессмысленно");
+        }
+
+        // 1. Расшифровываем AES-ключ файла нашим приватным RSA-ключом.
+        byte[] encryptedAesKey = Base64.getDecoder().decode(original.getEncryptedAesKey());
+        byte[] rawAesKey = RsaOaep.decrypt(encryptedAesKey, ownerPrivateKey);
+
+        // 2. Шифруем тот же AES-ключ под публичным ключом recipient'а.
+        PublicKey recipientKey = KeyManager.publicKeyFromBase64(recipientPublicKeyB64);
+        byte[] reencrypted = RsaOaep.encrypt(rawAesKey, recipientKey);
+        String reencryptedB64 = Base64.getEncoder().encodeToString(reencrypted);
+
+        // 3. Из соображений гигиены затираем raw AES-ключ — Java не даёт
+        // полноценно стирать строки, но byte[] обнулить можем.
+        java.util.Arrays.fill(rawAesKey, (byte) 0);
+
+        // 4. Формируем и подписываем ACL-транзакцию.
+        Transaction acl = Transaction.newAcl(
+                ownerPublicKeyBase64, originalTxId, recipientPublicKeyB64, reencryptedB64);
+        acl.sign(ownerPrivateKey);
+
+        // 5. Добавляем в блокчейн.
+        blockchain.addBlock(List.of(acl));
+        LOG.info("ACL выдан: txId={} recipient={}",
+                shortHash(originalTxId), shortNode(recipientPublicKeyB64));
+        return acl;
+    }
+
+    // ================================================================
+    // День 9: DELETE — логическое удаление
+    // ================================================================
+
+    /**
+     * Создаёт DELETE-транзакцию: помечает файл как удалённый.
+     * <p>
+     * Физически шарды с узлов-хранителей не стираются (это была бы отдельная
+     * задача Garbage Collection, ТЗ п. 4.1.1.4.3 явно говорит о «логическом
+     * удалении»). После DELETE:
+     * <ul>
+     *   <li>{@link Blockchain#listByOwner} перестаёт возвращать эту TX;</li>
+     *   <li>попытка {@code download} на неё должна вернуть осмысленную ошибку
+     *       (это контролируется в {@code FileDownloader});</li>
+     *   <li>попытка повторного DELETE — допустима (идемпотентна), просто
+     *       создаст вторую DELETE-транзакцию.</li>
+     * </ul>
+     *
+     * @return DELETE-транзакция, уже добавленная в локальный блокчейн
+     */
+    public Transaction deleteFile(String originalTxId) {
+        Objects.requireNonNull(originalTxId, "originalTxId");
+
+        Transaction original = blockchain.findByTxId(originalTxId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Транзакция " + originalTxId + " не найдена в блокчейне"));
+
+        if (original.getKind() != Transaction.Kind.UPLOAD) {
+            throw new IllegalArgumentException(
+                    "Удалить можно только UPLOAD-транзакцию, а у этой kind="
+                            + original.getKind());
+        }
+        if (!ownerPublicKeyBase64.equals(original.getOwnerPublicKey())) {
+            throw new IllegalArgumentException(
+                    "Удалить чужой файл нельзя");
+        }
+
+        Transaction del = Transaction.newDelete(ownerPublicKeyBase64, originalTxId);
+        del.sign(ownerPrivateKey);
+        blockchain.addBlock(List.of(del));
+        LOG.info("DELETE применён к txId={}", shortHash(originalTxId));
+        return del;
+    }
+
+    // ================================================================
+    // День 10: вспомогательные методы для RepairService
+    // ================================================================
+
+    /**
+     * Подписывает уже сформированную транзакцию приватным ключом владельца.
+     * <p>
+     * Используется {@link RepairService} для подписи REPAIR-транзакции,
+     * у которой все поля уже заполнены — нужна только подпись. Сделано
+     * отдельным методом, чтобы RepairService не имел доступа к приватному
+     * ключу напрямую.
+     */
+    void signTransactionAsOwner(Transaction tx) {
+        Objects.requireNonNull(tx, "tx");
+        if (!ownerPublicKeyBase64.equals(tx.getOwnerPublicKey())) {
+            throw new IllegalArgumentException(
+                    "Подписываем только свои транзакции; ownerPublicKey не совпадает");
+        }
+        tx.sign(ownerPrivateKey);
+    }
+
+    // ================================================================
+    // Утилиты
+    // ================================================================
+
+    private static String shortHash(String hash) {
+        if (hash == null) return "?";
+        return hash.length() > 8 ? hash.substring(0, 8) + "…" : hash;
+    }
+
+    private static String shortNode(String nodeId) {
+        if (nodeId == null) return "?";
+        return nodeId.length() > 8 ? nodeId.substring(0, 8) + "…" : nodeId;
     }
 
     /** Удалённый хранитель — пара (nodeId, активная сессия к нему). */

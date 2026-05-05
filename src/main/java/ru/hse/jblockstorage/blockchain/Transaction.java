@@ -70,6 +70,53 @@ public class Transaction implements Serializable {
     /** Подписанные квитанции от хранителей шардов (proof of placement). */
     private List<StorageReceipt> replicas = Collections.emptyList();
 
+    // ---------- Поля дня 9: типизация транзакций (ACL, DELETE) ----------
+
+    /**
+     * Тип транзакции. Default = {@link Kind#UPLOAD} для совместимости со
+     * старыми тестами и blockchain-данными в RocksDB, где этого поля не было.
+     */
+    private Kind kind = Kind.UPLOAD;
+
+    /**
+     * Для ACL/DELETE — id оригинальной UPLOAD-транзакции, к которой
+     * применяется операция. Для UPLOAD-транзакций не используется.
+     */
+    private String referencedTxId;
+
+    /**
+     * Для ACL — публичный ключ получателя доступа (Base64 X.509).
+     * Это пользователь, которому владелец предоставляет право скачать файл.
+     */
+    private String recipientPublicKey;
+
+    /**
+     * Для ACL — AES-ключ файла, перешифрованный под публичным ключом recipient'а
+     * через RSA-OAEP (Base64). При скачивании recipient расшифровывает его
+     * своим приватным ключом, как обычно владелец делает с {@link #encryptedAesKey}.
+     */
+    private String encryptedAesKeyForRecipient;
+
+    /**
+     * Тип транзакции (ТЗ п. 4.1.1.3.1, 4.1.1.3.2, 4.1.1.4.3, 4.2.2).
+     */
+    public enum Kind {
+        /** Загрузка нового файла — содержит метаданные, шарды, реплики. */
+        UPLOAD,
+        /** Предоставление доступа другому пользователю (ACL TX). */
+        ACL,
+        /** Логическое удаление файла (Delete TX). */
+        DELETE,
+        /**
+         * Восстановление репликации после выхода узлов из сети
+         * (Repair TX, ТЗ п. 4.2.2). Содержит ссылку на оригинальный UPLOAD
+         * + актуальный полный список реплик (старые живые + новые).
+         * Поле {@link #shardHashes} дублируется из оригинала, чтобы
+         * downloader мог скачивать файл, опираясь только на свежую REPAIR-TX.
+         */
+        REPAIR
+    }
+
     // Пустой конструктор для Jackson (JSON)
     public Transaction() {}
 
@@ -113,6 +160,22 @@ public class Transaction implements Serializable {
             sb.append("|replicas=");
             for (StorageReceipt r : replicas) {
                 sb.append(r.getStorerPublicKey()).append(':').append(r.getShardHashHex()).append(',');
+            }
+        }
+
+        // Поля дня 9 — добавляются только для ACL/DELETE транзакций.
+        // Для UPLOAD они не выводятся, что сохраняет байт-в-байт совместимость
+        // со старыми подписями и блоками в RocksDB.
+        if (kind != null && kind != Kind.UPLOAD) {
+            sb.append("|kind=").append(kind.name());
+            if (referencedTxId != null) {
+                sb.append("|ref=").append(referencedTxId);
+            }
+            if (recipientPublicKey != null) {
+                sb.append("|recipient=").append(recipientPublicKey);
+            }
+            if (encryptedAesKeyForRecipient != null) {
+                sb.append("|aclKey=").append(encryptedAesKeyForRecipient);
             }
         }
         return sb.toString();
@@ -221,6 +284,11 @@ public class Transaction implements Serializable {
     public List<String> getShardHashes() { return shardHashes; }
     public List<StorageReceipt> getReplicas() { return replicas; }
 
+    public Kind getKind() { return kind; }
+    public String getReferencedTxId() { return referencedTxId; }
+    public String getRecipientPublicKey() { return recipientPublicKey; }
+    public String getEncryptedAesKeyForRecipient() { return encryptedAesKeyForRecipient; }
+
     // Сеттеры — нужны только Jackson для десериализации из JSON.
     // В коде их не вызываем напрямую; для подписи используем sign(PrivateKey).
     public void setId(String id) { this.id = id; }
@@ -235,5 +303,116 @@ public class Transaction implements Serializable {
     }
     public void setReplicas(List<StorageReceipt> replicas) {
         this.replicas = replicas == null ? Collections.emptyList() : new ArrayList<>(replicas);
+    }
+
+    public void setKind(Kind kind) {
+        // Jackson при десериализации старых блоков (где этого поля нет) пришлёт
+        // null — значит UPLOAD. Сами никогда не должны устанавливать null.
+        this.kind = kind == null ? Kind.UPLOAD : kind;
+    }
+    public void setReferencedTxId(String referencedTxId) { this.referencedTxId = referencedTxId; }
+    public void setRecipientPublicKey(String recipientPublicKey) { this.recipientPublicKey = recipientPublicKey; }
+    public void setEncryptedAesKeyForRecipient(String encryptedAesKeyForRecipient) {
+        this.encryptedAesKeyForRecipient = encryptedAesKeyForRecipient;
+    }
+
+    // ---------- Фабричные методы для ACL / DELETE (день 9) ----------
+
+    /**
+     * Создаёт ACL-транзакцию: владелец предоставляет доступ к файлу
+     * {@code originalUploadTx} пользователю с публичным ключом {@code recipientPublicKey}.
+     * <p>
+     * Содержимое поля {@code encryptedAesKeyForRecipient} рассчитывается
+     * вызывающим кодом (см. {@code FileUploader.shareFile}) — здесь оно
+     * передаётся уже готовое, потому что шифрование AES-ключа RSA-OAEP'ом
+     * требует доступа к приватному ключу владельца, который Transaction
+     * не должен видеть.
+     * <p>
+     * Возвращённая транзакция ещё не подписана — вызывающий код должен
+     * вызвать {@link #sign(PrivateKey)} с приватным ключом владельца.
+     *
+     * @param ownerPublicKeyB64           публичный ключ владельца файла (Base64)
+     * @param originalTxId                id оригинальной UPLOAD-транзакции
+     * @param recipientPublicKeyB64       публичный ключ recipient'а (Base64)
+     * @param encryptedAesKeyForRecipient AES-ключ файла, зашифрованный
+     *                                    под публичным ключом recipient'а (Base64)
+     */
+    public static Transaction newAcl(String ownerPublicKeyB64,
+                                     String originalTxId,
+                                     String recipientPublicKeyB64,
+                                     String encryptedAesKeyForRecipient) {
+        Transaction tx = new Transaction();
+        tx.kind = Kind.ACL;
+        tx.ownerPublicKey = ownerPublicKeyB64;
+        tx.referencedTxId = originalTxId;
+        tx.recipientPublicKey = recipientPublicKeyB64;
+        tx.encryptedAesKeyForRecipient = encryptedAesKeyForRecipient;
+        // Для удобства поиска и логов оставляем имя/размер как «n/a» —
+        // ACL не сам по себе файл, а ссылка на UPLOAD.
+        tx.fileName = "ACL:" + (originalTxId == null ? "?" : originalTxId.substring(0, Math.min(8, originalTxId.length())));
+        tx.fileSize = 0L;
+        tx.merkleRoot = "";
+        tx.timestamp = System.currentTimeMillis();
+        return tx;
+    }
+
+    /**
+     * Создаёт DELETE-транзакцию: владелец помечает файл как удалённый.
+     * <p>
+     * Возвращённая транзакция ещё не подписана.
+     *
+     * @param ownerPublicKeyB64 публичный ключ владельца (Base64)
+     * @param originalTxId      id оригинальной UPLOAD-транзакции
+     */
+    public static Transaction newDelete(String ownerPublicKeyB64, String originalTxId) {
+        Transaction tx = new Transaction();
+        tx.kind = Kind.DELETE;
+        tx.ownerPublicKey = ownerPublicKeyB64;
+        tx.referencedTxId = originalTxId;
+        tx.fileName = "DELETE:" + (originalTxId == null ? "?" : originalTxId.substring(0, Math.min(8, originalTxId.length())));
+        tx.fileSize = 0L;
+        tx.merkleRoot = "";
+        tx.timestamp = System.currentTimeMillis();
+        return tx;
+    }
+
+    /**
+     * Создаёт REPAIR-транзакцию: владелец фиксирует обновлённый список реплик
+     * после авто-восстановления репликации (ТЗ п. 4.2.2).
+     * <p>
+     * Содержит:
+     * <ul>
+     *   <li>ссылку на оригинальный UPLOAD через {@link #referencedTxId};</li>
+     *   <li>дублированные {@link #shardHashes} в правильном порядке —
+     *       чтобы downloader мог восстановить файл по одной только этой TX;</li>
+     *   <li>актуальный список {@link #replicas}: старые живые receipts +
+     *       новые от свежевыбранных хранителей. Любой из них можно использовать
+     *       для скачивания.</li>
+     * </ul>
+     * <p>
+     * Возвращённая транзакция ещё не подписана.
+     *
+     * @param ownerPublicKeyB64 публичный ключ владельца (Base64)
+     * @param originalTxId      id оригинальной UPLOAD-транзакции
+     * @param shardHashes       полный упорядоченный список хешей шардов
+     *                          (копируется из оригинального UPLOAD)
+     */
+    public static Transaction newRepair(String ownerPublicKeyB64,
+                                        String originalTxId,
+                                        List<String> shardHashes) {
+        Transaction tx = new Transaction();
+        tx.kind = Kind.REPAIR;
+        tx.ownerPublicKey = ownerPublicKeyB64;
+        tx.referencedTxId = originalTxId;
+        tx.shardHashes = shardHashes == null
+                ? Collections.emptyList() : new ArrayList<>(shardHashes);
+        tx.fileName = "REPAIR:" + (originalTxId == null ? "?" : originalTxId.substring(0, Math.min(8, originalTxId.length())));
+        tx.fileSize = 0L;
+        tx.merkleRoot = "";
+        tx.timestamp = System.currentTimeMillis();
+        // replicas дополняются вызывающим кодом ПЕРЕД sign(): ему нужно сначала
+        // собрать receipts от новых хранителей, потом вызвать setReplicas, потом
+        // sign(). По той же схеме, что и UPLOAD в FileUploader.
+        return tx;
     }
 }

@@ -40,6 +40,18 @@ public final class KeyManager {
     public static final String KEY_ALGORITHM = "RSA";
     public static final int RSA_KEY_BITS = 2048;
 
+    /**
+     * Минимальная длина пароля для шифрования приватного ключа (ТЗ п. 4.1.2,
+     * Таблица 1 — поле «Пароль ключа: длина от 8 символов»).
+     * <p>
+     * Сама криптография (PBKDF2 + AES-GCM) корректно работает с любым паролем,
+     * включая пустой; ограничение носит пользовательский характер — слишком
+     * короткий пароль легко подбирается. Поэтому проверка вынесена в отдельный
+     * метод {@link #validatePassword(char[])}, который вызывается на уровне
+     * CLI/GUI перед сохранением ключа.
+     */
+    public static final int MIN_PASSWORD_LENGTH = 8;
+
     private static final int PBKDF2_ITERATIONS = 200_000;
     private static final int PBKDF2_KEY_BITS = 256;
     private static final int SALT_BYTES = 16;
@@ -51,6 +63,30 @@ public final class KeyManager {
 
     private KeyManager() {
         // утилитный класс
+    }
+
+    /**
+     * Проверяет, что пользовательский пароль соответствует ограничениям ТЗ
+     * (длина не менее {@link #MIN_PASSWORD_LENGTH} символов).
+     * <p>
+     * Вызывается из CLI/GUI перед {@link #saveEncryptedPrivateKey}. Не вызывается
+     * из самого {@code saveEncryptedPrivateKey}, чтобы:
+     * <ul>
+     *   <li>не ломать существующие тесты криптографии (round-trip с короткими
+     *       тестовыми паролями);</li>
+     *   <li>не мешать высокоэнтропийным паролям, выведенным из BIP-39 фразы
+     *       (они в hex-формате имеют длину 64, но проверять их через эту
+     *       функцию всё равно полезно — это семантически корректно).</li>
+     * </ul>
+     *
+     * @throws IllegalArgumentException если пароль {@code null}, пустой или
+     *                                  короче {@link #MIN_PASSWORD_LENGTH}
+     */
+    public static void validatePassword(char[] password) {
+        if (password == null || password.length < MIN_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Пароль должен быть не короче " + MIN_PASSWORD_LENGTH + " символов");
+        }
     }
 
     /** Генерирует свежую пару RSA-2048 для нового профиля пользователя. */

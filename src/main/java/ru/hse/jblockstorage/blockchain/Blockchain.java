@@ -131,6 +131,53 @@ public class Blockchain {
         return true;
     }
 
+    /**
+     * Добавляет уже сформированный блок в конец цепи. В отличие от
+     * {@link #addBlock(List)}, который сам создаёт блок из транзакций,
+     * этот метод нужен для приёма блоков от других узлов (broadcast/sync).
+     * <p>
+     * Проверяет:
+     * <ul>
+     *   <li>{@code block.index == latest.index + 1};</li>
+     *   <li>{@code block.prevHash == latest.hash};</li>
+     *   <li>{@code block.validate()} — внутренняя целостность (хеш + подписи).</li>
+     * </ul>
+     * Возвращает {@code true} если блок принят и добавлен.
+     * <p>
+     * Если приходит блок с {@code index <= height-1} (мы такого уже видели или
+     * у нас более длинная цепь) — возвращаем {@code false} без побочных эффектов.
+     * Если приходит блок с {@code index > height} (есть пропуск) — тоже
+     * {@code false}; вышестоящий код должен инициировать sync через
+     * {@code GetBlockMessage}.
+     *
+     * @param block блок для добавления
+     * @return {@code true} если блок успешно добавлен
+     */
+    public synchronized boolean appendBlock(Block block) {
+        Objects.requireNonNull(block, "block");
+        Block latest = getLatestBlock();
+        if (block.getIndex() != latest.getIndex() + 1) {
+            return false;
+        }
+        if (!latest.getHash().equals(block.getPrevHash())) {
+            return false;
+        }
+        if (!block.validate()) {
+            return false;
+        }
+        chain.add(block);
+        return true;
+    }
+
+    /**
+     * Проверяет, есть ли в цепи блок с указанным индексом — без выбрасывания
+     * исключения. Используется при синхронизации, чтобы не запрашивать
+     * блоки, которые у нас уже есть.
+     */
+    public boolean hasBlock(int index) {
+        return index >= 0 && index < chain.size();
+    }
+
     // ---------- Поиск транзакций (день 7, для CLI) ----------
 
     /**
@@ -171,6 +218,12 @@ public class Blockchain {
      * Все транзакции, владельцем которых является указанный публичный ключ
      * (Base64 X.509). Используется CLI {@code list} для показа файлов
      * текущего пользователя.
+     *
+     * <h3>Семантика дня 9</h3>
+     * Возвращает только {@link Transaction.Kind#UPLOAD} транзакции, у которых
+     * нет соответствующей DELETE-транзакции от того же владельца. То есть
+     * с точки зрения пользователя — только «живые» файлы. ACL-транзакции
+     * этого пользователя сюда не входят (для них есть {@link #listByRecipient}).
      */
     public List<Transaction> listByOwner(String ownerPublicKeyBase64) {
         Objects.requireNonNull(ownerPublicKeyBase64, "ownerPublicKeyBase64");
@@ -178,11 +231,141 @@ public class Blockchain {
         for (Block b : chain) {
             if (b.getTransactions() == null) continue;
             for (Transaction tx : b.getTransactions()) {
-                if (ownerPublicKeyBase64.equals(tx.getOwnerPublicKey())) {
-                    result.add(tx);
-                }
+                if (tx.getKind() != Transaction.Kind.UPLOAD) continue;
+                if (!ownerPublicKeyBase64.equals(tx.getOwnerPublicKey())) continue;
+                if (isDeleted(tx.getId())) continue;
+                result.add(tx);
             }
         }
         return result;
+    }
+
+    /**
+     * Проверяет, помечен ли файл (UPLOAD-транзакция с id={@code uploadTxId})
+     * как удалённый — то есть существует ли DELETE-транзакция от того же
+     * владельца, ссылающаяся на этот id.
+     * <p>
+     * Возвращает {@code false}, если оригинальной UPLOAD-транзакции нет в
+     * цепи (обычно это значит, что вызов сделан до её появления — лучше
+     * считать «не удалена», чем кидать исключение).
+     */
+    public boolean isDeleted(String uploadTxId) {
+        Objects.requireNonNull(uploadTxId, "uploadTxId");
+        Optional<Transaction> uploadOpt = findByTxId(uploadTxId);
+        if (uploadOpt.isEmpty() || uploadOpt.get().getKind() != Transaction.Kind.UPLOAD) {
+            return false;
+        }
+        String owner = uploadOpt.get().getOwnerPublicKey();
+        for (Block b : chain) {
+            if (b.getTransactions() == null) continue;
+            for (Transaction tx : b.getTransactions()) {
+                if (tx.getKind() != Transaction.Kind.DELETE) continue;
+                if (!uploadTxId.equals(tx.getReferencedTxId())) continue;
+                // Только владелец имеет право удалить. Чужой DELETE
+                // (даже валидно подписанный) игнорируется на уровне семантики.
+                if (owner.equals(tx.getOwnerPublicKey())) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Ищет последнюю ACL-транзакцию, выданную владельцем UPLOAD-транзакции
+     * {@code uploadTxId} получателю {@code recipientPublicKeyBase64}.
+     * <p>
+     * «Последнюю» в смысле порядка в блокчейне — берётся самая поздняя
+     * запись. Это позволит в будущем «отзывать» доступ через новую
+     * ACL-транзакцию с пустым AES-ключом (на дне 9 не реализуем — пусть
+     * будет точка расширения).
+     *
+     * @return найденная ACL-транзакция или {@link Optional#empty()}
+     */
+    public Optional<Transaction> findAclFor(String uploadTxId, String recipientPublicKeyBase64) {
+        Objects.requireNonNull(uploadTxId, "uploadTxId");
+        Objects.requireNonNull(recipientPublicKeyBase64, "recipientPublicKeyBase64");
+        // Идём с конца цепи — первой нашей встретится самая свежая ACL.
+        for (int i = chain.size() - 1; i >= 0; i--) {
+            Block b = chain.get(i);
+            if (b.getTransactions() == null) continue;
+            // Внутри одного блока тоже идём с конца, чтобы при нескольких
+            // ACL в одном блоке вернуть ту, что добавили позже.
+            List<Transaction> txs = b.getTransactions();
+            for (int j = txs.size() - 1; j >= 0; j--) {
+                Transaction tx = txs.get(j);
+                if (tx.getKind() != Transaction.Kind.ACL) continue;
+                if (!uploadTxId.equals(tx.getReferencedTxId())) continue;
+                if (!recipientPublicKeyBase64.equals(tx.getRecipientPublicKey())) continue;
+                return Optional.of(tx);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Все UPLOAD-транзакции, к которым у указанного recipient'а есть ACL.
+     * <p>
+     * Удалённые файлы не возвращаются. Используется в GUI «Расшаренное со
+     * мной» и для CLI {@code list-shared}.
+     */
+    public List<Transaction> listByRecipient(String recipientPublicKeyBase64) {
+        Objects.requireNonNull(recipientPublicKeyBase64, "recipientPublicKeyBase64");
+        // Сначала собираем txId, к которым у меня выдан ACL.
+        List<String> accessibleTxIds = new ArrayList<>();
+        for (Block b : chain) {
+            if (b.getTransactions() == null) continue;
+            for (Transaction tx : b.getTransactions()) {
+                if (tx.getKind() != Transaction.Kind.ACL) continue;
+                if (!recipientPublicKeyBase64.equals(tx.getRecipientPublicKey())) continue;
+                if (tx.getReferencedTxId() != null
+                        && !accessibleTxIds.contains(tx.getReferencedTxId())) {
+                    accessibleTxIds.add(tx.getReferencedTxId());
+                }
+            }
+        }
+        // Затем находим оригинальные UPLOAD'ы, отбрасывая удалённые.
+        List<Transaction> result = new ArrayList<>();
+        for (String uploadId : accessibleTxIds) {
+            findByTxId(uploadId).ifPresent(uploadTx -> {
+                if (uploadTx.getKind() == Transaction.Kind.UPLOAD && !isDeleted(uploadId)) {
+                    result.add(uploadTx);
+                }
+            });
+        }
+        return result;
+    }
+
+    /**
+     * Ищет последнюю REPAIR-транзакцию для оригинального UPLOAD'а
+     * {@code uploadTxId}. «Последнюю» в смысле порядка в блокчейне —
+     * берётся самая поздняя запись.
+     * <p>
+     * Используется в {@link ru.hse.jblockstorage.app.FileDownloader} —
+     * downloader предпочитает самый свежий список реплик. Также в
+     * {@code RepairService} — чтобы понять, какие реплики уже были
+     * перерекомендованы при предыдущем repair.
+     *
+     * <p>Семантика: возвращается REPAIR от того же владельца, что и
+     * оригинальный UPLOAD (чужой REPAIR на чужой файл — игнорируется).
+     */
+    public Optional<Transaction> findLatestRepairFor(String uploadTxId) {
+        Objects.requireNonNull(uploadTxId, "uploadTxId");
+        Optional<Transaction> uploadOpt = findByTxId(uploadTxId);
+        if (uploadOpt.isEmpty()) return Optional.empty();
+        String legitimateOwner = uploadOpt.get().getOwnerPublicKey();
+
+        // Идём с конца цепи — первая встреченная REPAIR будет самой свежей.
+        for (int i = chain.size() - 1; i >= 0; i--) {
+            Block b = chain.get(i);
+            if (b.getTransactions() == null) continue;
+            List<Transaction> txs = b.getTransactions();
+            for (int j = txs.size() - 1; j >= 0; j--) {
+                Transaction tx = txs.get(j);
+                if (tx.getKind() != Transaction.Kind.REPAIR) continue;
+                if (!uploadTxId.equals(tx.getReferencedTxId())) continue;
+                if (!legitimateOwner.equals(tx.getOwnerPublicKey())) continue;
+                return Optional.of(tx);
+            }
+        }
+        return Optional.empty();
     }
 }

@@ -76,6 +76,17 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
      */
     private volatile int listenPortOverride = -1;
 
+    /**
+     * Колбэк, вызываемый после успешной обработки входящего handshake'а.
+     * Принимает (сессия пира, peerNodeId, peerHeight). Нужен для подписки
+     * BlockSyncService — после handshake'а сравнить высоты и инициировать
+     * sync, если нужно. {@code null} (по умолчанию) — никакого сайд-эффекта.
+     * <p>
+     * Вынесен в callback, а не в прямую зависимость, чтобы PeerManager
+     * оставался независим от пакета {@code app/}.
+     */
+    private volatile HandshakeListener handshakeListener;
+
     /** Известные пиры по их nodeId. */
     private final Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
 
@@ -85,6 +96,16 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
     private ScheduledExecutorService scheduler;
     private boolean started;
     private boolean closed;
+
+    /**
+     * Путь к файлу persistent-таблицы пиров. Если установлен через
+     * {@link #enablePeriodicPeersSave}, то в {@link #start()} зарегистрируется
+     * фоновая задача, которая раз в {@link #peersSaveInterval} вызывает
+     * {@link #savePeers(java.nio.file.Path)}. Защита от потери данных при
+     * аварийном падении процесса (без graceful close).
+     */
+    private volatile java.nio.file.Path periodicPeersFile;
+    private volatile java.time.Duration peersSaveInterval;
 
     /**
      * @param config                    параметры таймингов и максимального числа пиров
@@ -122,6 +143,34 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
             throw new IllegalStateException("outgoingClient уже установлен");
         }
         this.outgoingClient = Objects.requireNonNull(client, "client");
+    }
+
+    /**
+     * Подписаться на событие "handshake обработан". Вызывается ПОСЛЕ того, как
+     * сессия зарегистрирована в таблице — то есть слушатель уже может слать
+     * сообщения через {@code peer.send(...)}, и их доставка не зависит от того,
+     * успел ли отработать ответный handshake. Также после вызова listener'а
+     * сессия точно есть в {@link #snapshotSessions()}.
+     *
+     * <p>Установка возможна только до {@link #start()}, аналогично outgoingClient.
+     * Listener один — для нашего use case (BlockSyncService) этого достаточно;
+     * если в будущем понадобится несколько — заменим на {@code CopyOnWriteArrayList}.
+     */
+    public synchronized void setHandshakeListener(HandshakeListener listener) {
+        if (started) {
+            throw new IllegalStateException(
+                    "setHandshakeListener должен вызываться до start()");
+        }
+        this.handshakeListener = Objects.requireNonNull(listener, "listener");
+    }
+
+    /**
+     * Вызывается из {@link PeerManager#handleHandshake} сразу после регистрации
+     * сессии. Слушатель видит уже консистентное состояние таблицы пиров.
+     */
+    @FunctionalInterface
+    public interface HandshakeListener {
+        void onHandshake(PeerSession peer, String peerNodeId, int peerHeight);
     }
 
     /**
@@ -170,6 +219,17 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
         scheduler.scheduleAtFixedRate(this::pingTick,  pingMs,   pingMs,   TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::gossipTick, gossipMs, gossipMs, TimeUnit.MILLISECONDS);
 
+        // День 11: периодический save peers.json. Защищает от потери данных
+        // при аварийном падении процесса — на close() мы и так сохраняем,
+        // но если JVM убили сигналом SIGKILL, close() не вызовется.
+        if (periodicPeersFile != null) {
+            long saveMs = Math.max(1, peersSaveInterval.toMillis());
+            scheduler.scheduleAtFixedRate(this::periodicSavePeersTick,
+                    saveMs, saveMs, TimeUnit.MILLISECONDS);
+            LOG.debug("Periodic peers save включён (interval={}мс, file={})",
+                    saveMs, periodicPeersFile);
+        }
+
         LOG.debug("PeerManager стартовал (ping={}мс, gossip={}мс)", pingMs, gossipMs);
     }
 
@@ -192,6 +252,113 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
     /** Снимок текущей таблицы (копия — мутирующие изменения не повлияют). */
     public List<PeerInfo> snapshot() {
         return new ArrayList<>(peers.values());
+    }
+
+    /**
+     * Включает периодическое автосохранение таблицы пиров в указанный файл
+     * (день 11). Должен быть вызван ДО {@link #start()} — в start()
+     * регистрируется fixed-rate задача в общем scheduler'е.
+     * <p>
+     * Цель — защита от ситуации, когда JVM падает по SIGKILL и graceful close
+     * не успевает выполнить save. Между авариями узел всё равно теряет данные,
+     * но не больше, чем за один интервал.
+     *
+     * @param file     путь к файлу (тот же, что передаётся в {@link #savePeers})
+     * @param interval период между сохранениями (например, {@code Duration.ofMinutes(1)})
+     * @throws IllegalStateException если уже стартовал или закрыт
+     */
+    public synchronized void enablePeriodicPeersSave(
+            java.nio.file.Path file, java.time.Duration interval) {
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(interval, "interval");
+        if (started) throw new IllegalStateException(
+                "enablePeriodicPeersSave должен вызываться до start()");
+        if (closed) throw new IllegalStateException("PeerManager закрыт");
+        if (interval.toMillis() < 1) {
+            throw new IllegalArgumentException("interval должен быть положительным");
+        }
+        this.periodicPeersFile = file;
+        this.peersSaveInterval = interval;
+    }
+
+    private void periodicSavePeersTick() {
+        try {
+            java.nio.file.Path file = periodicPeersFile;
+            if (file == null) return;
+            java.nio.file.Path parent = file.toAbsolutePath().getParent();
+            if (parent != null) {
+                java.nio.file.Files.createDirectories(parent);
+            }
+            savePeers(file);
+        } catch (Throwable t) {
+            // Не позволяем исключению прибить scheduler — это бы остановило
+            // ping и gossip заодно. Логируем и продолжаем.
+            LOG.warn("Periodic save peers упал: {}", t.toString());
+        }
+    }
+
+    /**
+     * Сохраняет текущую таблицу пиров в JSON-файл (день 10, ТЗ п. 4.1.1.1.1
+     * + ограничение «persistence пиров» из дней 5–7).
+     * <p>
+     * После рестарта узла мы восстанавливаем таблицу из файла, что ускоряет
+     * дискавери — не нужно ждать gossip от seed'ов. Аналогично Bitcoin Core
+     * с его {@code peers.dat}.
+     * <p>
+     * Записываются ВСЕ пиры из таблицы (даже те, что давно не отвечали) —
+     * на загрузке мы не знаем, кто из них живой. Узел проверит по ping'у
+     * и выкинет мёртвых через peerTimeout.
+     *
+     * @param file путь к файлу. Родительские директории должны существовать.
+     */
+    public void savePeers(java.nio.file.Path file) throws java.io.IOException {
+        Objects.requireNonNull(file, "file");
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        List<PeerInfo> snapshot = snapshot();
+        mapper.writerWithDefaultPrettyPrinter()
+                .writeValue(file.toFile(), snapshot);
+        LOG.debug("Сохранено {} пиров в {}", snapshot.size(), file);
+    }
+
+    /**
+     * Загружает таблицу пиров из JSON-файла. Если файл не существует —
+     * молча возвращает 0 (нормальная ситуация для первого запуска).
+     * <p>
+     * Загруженные записи добавляются через {@code putIfAbsent} — это значит,
+     * что свежие записи (например, из gossip'а, который успел случиться
+     * до load) не будут перезаписаны старыми с диска. Защита от ситуации,
+     * когда узел между save и load успел что-то узнать.
+     *
+     * @return сколько записей загружено
+     */
+    public int loadPeers(java.nio.file.Path file) throws java.io.IOException {
+        Objects.requireNonNull(file, "file");
+        if (!java.nio.file.Files.isRegularFile(file)) {
+            LOG.debug("Файла {} нет — пропускаем загрузку peers", file);
+            return 0;
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        // FAIL_ON_UNKNOWN_PROPERTIES = false — на случай, если в будущем
+        // схема PeerInfo расширится, старые файлы должны грузиться.
+        mapper.configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
+                false);
+        List<PeerInfo> loaded = mapper.readValue(file.toFile(),
+                mapper.getTypeFactory().constructCollectionType(List.class, PeerInfo.class));
+
+        int added = 0;
+        for (PeerInfo p : loaded) {
+            if (p == null || selfNodeId.equals(p.getNodeId())) continue;
+            if (peers.size() >= config.getMaxPeers()) break;
+            if (peers.putIfAbsent(p.getNodeId(), p) == null) {
+                added++;
+            }
+        }
+        LOG.info("Загружено {} пиров из {} (всего в таблице: {})",
+                added, file, peers.size());
+        return added;
     }
 
     /** Сколько пиров сейчас в таблице. */
@@ -347,6 +514,18 @@ public final class PeerManager implements MessageHandler, AutoCloseable {
 
         LOG.debug("Handshake принят от {}{} (height={})",
                 shortId(hs.getNodeId()), isNew ? " [NEW]" : "", hs.getBlockchainHeight());
+
+        // Уведомляем подписчика (BlockSyncService) — он решает, нужно ли
+        // запросить недостающие блоки.
+        HandshakeListener listener = this.handshakeListener;
+        if (listener != null) {
+            try {
+                listener.onHandshake(peer, hs.getNodeId(), hs.getBlockchainHeight());
+            } catch (Exception e) {
+                LOG.warn("HandshakeListener бросил исключение для {}: {}",
+                        shortId(hs.getNodeId()), e.toString());
+            }
+        }
     }
 
     private void handlePing(PeerSession peer, PingMessage ping) {

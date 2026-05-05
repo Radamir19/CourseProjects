@@ -59,11 +59,49 @@ public final class FileDownloader {
 
     private final PrivateKey ownerPrivateKey;
 
+    /**
+     * Наш собственный публичный ключ (Base64). Нужен, чтобы при скачивании
+     * чужого файла понять «я recipient ACL» и взять перешифрованный ключ.
+     * Может быть {@code null} в старом API дня 6 (тогда работает только
+     * сценарий «скачиваем свой файл»).
+     */
+    private final String myPublicKeyBase64;
+
+    /**
+     * Ссылка на локальный блокчейн — нужна для поиска ACL-транзакций при
+     * скачивании чужих файлов и для
+     * проверки, не помечен ли файл как удалённый
+     * Может быть {@code null} в старом API дня 6 — в этом случае
+     * поддерживается только скачивание собственных файлов.
+     */
+    private final ru.hse.jblockstorage.blockchain.Blockchain blockchain;
+
     /** Pending shard requests: shardHashHex → future с ответом. */
     private final Map<String, CompletableFuture<ShardResponseMessage>> pendingShards = new ConcurrentHashMap<>();
 
+    /**
+     * Старый конструктор дня 6 — без поддержки ACL.
+     * Скачивание возможно только если транзакция принадлежит этому же владельцу
+     * (приватный ключ, переданный сюда). Используется в тестах дня 6, которые
+     * не работают с ACL.
+     */
     public FileDownloader(PrivateKey ownerPrivateKey) {
+        this(ownerPrivateKey, null, null);
+    }
+
+    /**
+     * Полный конструктор дня 9 — с поддержкой ACL и DELETE.
+     *
+     * @param ownerPrivateKey    приватный ключ текущего пользователя
+     * @param myPublicKeyBase64  публичный ключ (Base64) — для поиска ACL
+     * @param blockchain         блокчейн — для поиска ACL и проверки удаления
+     */
+    public FileDownloader(PrivateKey ownerPrivateKey,
+                          String myPublicKeyBase64,
+                          ru.hse.jblockstorage.blockchain.Blockchain blockchain) {
         this.ownerPrivateKey = Objects.requireNonNull(ownerPrivateKey, "ownerPrivateKey");
+        this.myPublicKeyBase64 = myPublicKeyBase64;
+        this.blockchain = blockchain;
     }
 
     /**
@@ -84,68 +122,150 @@ public final class FileDownloader {
         Objects.requireNonNull(storerSessions, "storerSessions");
         Objects.requireNonNull(outputFile, "outputFile");
 
-        // 1. Подготовка: hashHex → список nodeId, которые его хранят
-        Map<String, List<String>> shardToStorers = buildShardToStorerIndex(tx);
+        // День 9: проверки kind + DELETE.
+        if (tx.getKind() != Transaction.Kind.UPLOAD) {
+            throw new IllegalArgumentException(
+                    "Скачивать можно только UPLOAD-транзакции, а у этой kind="
+                            + tx.getKind());
+        }
+        if (blockchain != null && blockchain.isDeleted(tx.getId())) {
+            throw new IllegalStateException(
+                    "Файл помечен как удалённый — скачать нельзя");
+        }
+
+        // 1. Подготовка: hashHex → список nodeId, которые его хранят.
+        // День 10: если есть REPAIR-транзакция — её список реплик свежее
+        // оригинального UPLOAD'а. Используем последнюю REPAIR.
+        Transaction replicaSource = tx;
+        if (blockchain != null) {
+            replicaSource = blockchain.findLatestRepairFor(tx.getId()).orElse(tx);
+        }
+        Map<String, List<String>> shardToStorers = buildShardToStorerIndex(replicaSource);
         List<String> orderedShards = tx.getShardHashes();
         if (orderedShards == null || orderedShards.isEmpty()) {
             throw new IllegalArgumentException("В транзакции нет списка шардов");
         }
 
-        LOG.info("Начинаем download '{}' ({} шардов, {} реплик)",
-                tx.getFileName(), orderedShards.size(), tx.getReplicas().size());
+        LOG.info("Начинаем download '{}' ({} шардов, {} реплик{})",
+                tx.getFileName(), orderedShards.size(),
+                replicaSource.getReplicas().size(),
+                replicaSource == tx ? "" : ", REPAIR применён");
 
-        // 2. Скачиваем каждый шард, перебирая хранителей
-        byte[][] collectedShards = new byte[orderedShards.size()][];
-        for (int i = 0; i < orderedShards.size(); i++) {
-            String hash = orderedShards.get(i);
-            List<String> storers = shardToStorers.getOrDefault(hash, List.of());
-            byte[] data = fetchShard(hash, storers, storerSessions);
-            if (data == null) {
-                throw new IllegalStateException(
-                        "Не удалось скачать шард " + hash.substring(0, 16)
-                                + "… ни от одного из " + storers.size() + " известных хранителей");
+        // 2. Расшифровка AES-ключа — делаем это ПЕРВЫМ, ДО скачивания шардов.
+        //    Если у нас нет доступа к файлу (нет своего ключа и нет ACL),
+        //    лучше упасть с явным "ACL не найден", чем сначала тянуть мегабайты
+        //    шардов по сети, а уже потом обнаружить, что расшифровать их нечем.
+        //    Это поведение ожидается тестом charlieWithoutAclCannotDownload.
+        byte[] rawAesKey = resolveAesKey(tx);
+
+        try {
+            // 3. Скачиваем каждый шард, перебирая хранителей
+            byte[][] collectedShards = new byte[orderedShards.size()][];
+            for (int i = 0; i < orderedShards.size(); i++) {
+                String hash = orderedShards.get(i);
+                List<String> storers = shardToStorers.getOrDefault(hash, List.of());
+                byte[] data = fetchShard(hash, storers, storerSessions);
+                if (data == null) {
+                    throw new IllegalStateException(
+                            "Не удалось скачать шард " + hash.substring(0, 16)
+                                    + "… ни от одного из " + storers.size() + " известных хранителей");
+                }
+                collectedShards[i] = data;
             }
-            collectedShards[i] = data;
+
+            // 4. Склейка шифротекста
+            int totalLen = 0;
+            for (byte[] s : collectedShards) totalLen += s.length;
+            byte[] ciphertext = new byte[totalLen];
+            int offset = 0;
+            for (byte[] s : collectedShards) {
+                System.arraycopy(s, 0, ciphertext, offset, s.length);
+                offset += s.length;
+            }
+
+            // 5. Расшифровка содержимого AES-GCM
+            SecretKey aesKey = AesGcm.keyFromBytes(rawAesKey);
+            byte[] plaintext = AesGcm.decrypt(ciphertext, aesKey);
+
+            // 6. Sanity check — размер должен совпадать с записанным в транзакции
+            if (plaintext.length != tx.getFileSize()) {
+                throw new IllegalStateException(
+                        "Размер расшифрованного файла " + plaintext.length
+                                + " не совпадает с заявленным в транзакции " + tx.getFileSize());
+            }
+
+            Files.write(outputFile, plaintext);
+            LOG.info("Файл успешно восстановлен: {} ({} байт)", outputFile, plaintext.length);
+        } finally {
+            // Затираем raw AES-ключ из памяти для гигиены — даже если выше
+            // случилось исключение (например, шард не скачался).
+            java.util.Arrays.fill(rawAesKey, (byte) 0);
+        }
+    }
+
+    /**
+     * Возвращает raw AES-ключ файла, расшифрованный нашим приватным
+     * ключом. Логика выбора источника:
+     * <ol>
+     *   <li>Если транзакция принадлежит нам — используем
+     *       {@link Transaction#getEncryptedAesKey()} напрямую.</li>
+     *   <li>Иначе — ищем ACL-транзакцию, выданную нам владельцем,
+     *       и берём {@link Transaction#getEncryptedAesKeyForRecipient()}.</li>
+     *   <li>Если ни того, ни другого — выбрасываем {@link IllegalStateException}.</li>
+     * </ol>
+     */
+    private byte[] resolveAesKey(Transaction tx) {
+        // Сценарий 1: владелец TX = мы.
+        if (myPublicKeyBase64 == null
+                || myPublicKeyBase64.equals(tx.getOwnerPublicKey())) {
+            // myPublicKeyBase64 == null — старый API дня 6 (FileDownloader без
+            // ACL). В этом сценарии тест предполагает, что вызывает владелец.
+            if (tx.getEncryptedAesKey() == null) {
+                throw new IllegalStateException("В транзакции нет encryptedAesKey");
+            }
+            byte[] enc = Base64.getDecoder().decode(tx.getEncryptedAesKey());
+            return RsaOaep.decrypt(enc, ownerPrivateKey);
         }
 
-        // 3. Склейка шифротекста
-        int totalLen = 0;
-        for (byte[] s : collectedShards) totalLen += s.length;
-        byte[] ciphertext = new byte[totalLen];
-        int offset = 0;
-        for (byte[] s : collectedShards) {
-            System.arraycopy(s, 0, ciphertext, offset, s.length);
-            offset += s.length;
-        }
-
-        // 4. Расшифровка AES-ключа RSA-OAEP'ом
-        if (tx.getEncryptedAesKey() == null) {
-            throw new IllegalStateException("В транзакции нет encryptedAesKey");
-        }
-        byte[] encryptedAesKey = Base64.getDecoder().decode(tx.getEncryptedAesKey());
-        byte[] rawAesKey = RsaOaep.decrypt(encryptedAesKey, ownerPrivateKey);
-        SecretKey aesKey = AesGcm.keyFromBytes(rawAesKey);
-
-        // 5. Расшифровка содержимого AES-GCM
-        byte[] plaintext = AesGcm.decrypt(ciphertext, aesKey);
-
-        // 6. Sanity check — размер должен совпадать с записанным в транзакции
-        if (plaintext.length != tx.getFileSize()) {
+        // Сценарий 2: ищем ACL — нужен blockchain.
+        if (blockchain == null) {
             throw new IllegalStateException(
-                    "Размер расшифрованного файла " + plaintext.length
-                            + " не совпадает с заявленным в транзакции " + tx.getFileSize());
+                    "Это чужая транзакция, но FileDownloader создан без блокчейна — "
+                            + "ACL искать негде");
         }
+        Transaction acl = blockchain.findAclFor(tx.getId(), myPublicKeyBase64)
+                .orElseThrow(() -> new IllegalStateException(
+                        "У вас нет доступа к этому файлу: ACL-транзакции не найдено"));
 
-        Files.write(outputFile, plaintext);
-        LOG.info("Файл успешно восстановлен: {} ({} байт)", outputFile, plaintext.length);
+        if (acl.getEncryptedAesKeyForRecipient() == null) {
+            throw new IllegalStateException(
+                    "ACL-транзакция найдена, но в ней нет ключа для recipient'а");
+        }
+        if (!acl.verify()) {
+            // Это серьёзный сигнал: ACL подделан или повреждён в блокчейне.
+            // Лучше отказать, чем расшифровать мусором.
+            throw new IllegalStateException(
+                    "ACL-транзакция не прошла проверку подписи владельца");
+        }
+        byte[] enc = Base64.getDecoder().decode(acl.getEncryptedAesKeyForRecipient());
+        LOG.info("Используем ACL-ключ от {} для скачивания", shortKey(acl.getOwnerPublicKey()));
+        return RsaOaep.decrypt(enc, ownerPrivateKey);
+    }
+
+    private static String shortKey(String key) {
+        if (key == null) return "?";
+        return key.length() > 8 ? key.substring(0, 8) + "…" : key;
     }
 
     /**
      * Скачивает один шард, перебирая хранителей по списку. Возвращает {@code null},
      * если ни один не ответил или все ответили мусором.
+     * <p>
+     * Метод пакет-приватный — переиспользуется в {@code RepairService}
+     * для скачивания шарда перед его перерепликацией (день 10).
      */
-    private byte[] fetchShard(String hashHex, List<String> storerNodeIds,
-                              Map<String, PeerSession> sessions)
+    byte[] fetchShard(String hashHex, List<String> storerNodeIds,
+                      Map<String, PeerSession> sessions)
             throws InterruptedException {
         for (String nodeId : storerNodeIds) {
             PeerSession session = sessions.get(nodeId);
@@ -197,7 +317,7 @@ public final class FileDownloader {
         Map<String, List<String>> result = new HashMap<>();
         for (StorageReceipt r : tx.getReplicas()) {
             result.computeIfAbsent(r.getShardHashHex(), k -> new ArrayList<>())
-                  .add(r.getStorerPublicKey()); // мы используем publicKey как nodeId
+                    .add(r.getStorerPublicKey()); // мы используем publicKey как nodeId
         }
         return result;
     }

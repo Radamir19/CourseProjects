@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 /**
  * Главный объект-оркестратор узла. Собирает в одном месте все компоненты
@@ -80,10 +81,30 @@ public final class NodeApplication implements AutoCloseable {
     private final StorageNodeService storageService;
     private final FileUploader uploader;
     private final FileDownloader downloader;
+    private final BlockSyncService blockSync;
+    private final RepairService repairService;
+    private final ShardGcService gcService;
     private final MessageRouter router;
 
     private final NodeServer server;
     private final NodeClient client;
+
+    private final boolean repairEnabled;
+    private final boolean gcEnabled;
+
+    /**
+     * Путь к JSON-файлу с persistent-таблицей пиров (день 10).
+     * Если родительская директория существует — файл будет создан/обновлён
+     * на close(). Если null — persistence отключён (in-memory режим).
+     */
+    private final Path peersFile;
+
+    /**
+     * Интервал периодического автосохранения {@link #peersFile} (день 11).
+     * Если null — автосохранение отключено (только save на close). По
+     * умолчанию для daemon-узла = 60с.
+     */
+    private final java.time.Duration peersAutoSaveInterval;
 
     private boolean started;
     private boolean closed;
@@ -130,8 +151,50 @@ public final class NodeApplication implements AutoCloseable {
         this.uploader = new FileUploader(publicKey, privateKey, blockchain,
                 FileChunker.DEFAULT_CHUNK_SIZE,
                 b.replicationFactor > 0 ? b.replicationFactor : FileUploader.DEFAULT_REPLICATION_FACTOR);
-        this.downloader = new FileDownloader(privateKey);
-        this.router = new MessageRouter(peerManager, storageService, uploader, downloader);
+        this.downloader = new FileDownloader(privateKey, selfNodeId, blockchain);
+
+        // День 8: блок-синхронизация. Persistence-хук на BlockchainStore,
+        // если он есть — это закрывает требование «блок, полученный от
+        // другого узла, должен переживать рестарт» (ТЗ п. 4.2.1 + 4.1.1.3.4).
+        Consumer<Block> persistHook = blockchainStore == null
+                ? null
+                : block -> {
+                    try {
+                        blockchainStore.saveBlock(block);
+                    } catch (Exception e) {
+                        LOG.warn("Не удалось persist'нуть блок index={}: {}",
+                                block.getIndex(), e.toString());
+                    }
+                };
+        this.blockSync = new BlockSyncService(blockchain,
+                () -> peerManager.snapshotSessions(),
+                persistHook);
+
+        // День 10: автоматическая re-репликация (ТЗ п. 4.2.2).
+        // checkInterval — берём из конфига если задан, иначе 30с.
+        java.time.Duration repairInterval = b.repairInterval != null
+                ? b.repairInterval : java.time.Duration.ofSeconds(30);
+        int rfForRepair = b.replicationFactor > 0
+                ? b.replicationFactor : FileUploader.DEFAULT_REPLICATION_FACTOR;
+        this.repairService = new RepairService(
+                selfNodeId, blockchain, shardStorage, uploader, downloader,
+                () -> peerManager.snapshotSessions(),
+                rfForRepair, repairInterval,
+                persistHook,
+                blockSync::broadcastNewBlock);
+
+        // День 11: физический GC шардов (ТЗ п. 4.1.1.4.3).
+        // По умолчанию interval = 60с — в production достаточно. Тесты
+        // подкручивают через builder.gcInterval() до 100мс.
+        java.time.Duration gcInterval = b.gcInterval != null
+                ? b.gcInterval : java.time.Duration.ofSeconds(60);
+        this.gcService = new ShardGcService(blockchain, shardStorage, gcInterval);
+
+        this.router = new MessageRouter(peerManager, storageService, uploader, downloader, blockSync);
+
+        // PeerManager шлёт уведомления о handshake'ах в blockSync — он
+        // решает, нужен ли pull-sync.
+        peerManager.setHandshakeListener(blockSync::onHandshake);
 
         // NodeClient/NodeServer создаём с router в качестве handler — оба используют
         // одну и ту же pipeline-конфигурацию.
@@ -139,6 +202,31 @@ public final class NodeApplication implements AutoCloseable {
         this.server = new NodeServer(b.bindHost != null ? b.bindHost : "0.0.0.0",
                 config.getListenPort(), router);
         this.bootstrap = new BootstrapDiscovery(config, client, peerManager);
+
+        this.repairEnabled = b.repairEnabled;
+        this.gcEnabled = b.gcEnabled;
+
+        // День 10: persistent-таблица пиров.
+        // По умолчанию — рядом с shardsDir в файле peers.json. Это удобно,
+        // потому что shardsDir есть всегда (в отличие от blockchainDir).
+        // Через builder можно явно отключить (для тестов) или задать другой путь.
+        if (b.peersFileExplicit != null) {
+            this.peersFile = b.peersFileExplicit;
+        } else if (b.peersFileDisabled) {
+            this.peersFile = null;
+        } else {
+            Path parent = shardsDir.getParent();
+            this.peersFile = (parent != null ? parent : shardsDir).resolve("peers.json");
+        }
+
+        // День 11: интервал автосохранения peers.json. По умолчанию 60с
+        // у daemon-узла. Если файл отключён вообще, интервал ни на что не
+        // влияет — start() проверит peersFile != null.
+        this.peersAutoSaveInterval = b.peersAutoSaveDisabled
+                ? null
+                : (b.peersAutoSaveInterval != null
+                        ? b.peersAutoSaveInterval
+                        : java.time.Duration.ofSeconds(60));
     }
 
     /** Запускает сервер, peer manager, выполняет bootstrap. */
@@ -154,7 +242,31 @@ public final class NodeApplication implements AutoCloseable {
 
         // 2. Peer manager + outgoing client.
         peerManager.setOutgoingClient(client);
+
+        // День 11: периодический save peers.json защищает от SIGKILL.
+        // Должен быть настроен ДО peerManager.start(), потому что start()
+        // регистрирует все scheduled-задачи разом.
+        if (peersFile != null && peersAutoSaveInterval != null) {
+            try {
+                peerManager.enablePeriodicPeersSave(peersFile, peersAutoSaveInterval);
+            } catch (Exception e) {
+                LOG.warn("Не удалось включить periodic peers save: {}", e.toString());
+            }
+        }
+
         peerManager.start();
+
+        // День 10: загружаем persistent-таблицу пиров. Это даёт «память»
+        // между запусками — узел не будет каждый раз с нуля бутстрапиться.
+        // Загруженные пиры будут проверены ping'ом фоновым таймером
+        // (мёртвые выкинутся через peerTimeout).
+        if (peersFile != null) {
+            try {
+                peerManager.loadPeers(peersFile);
+            } catch (Exception e) {
+                LOG.warn("Не удалось загрузить peers из {}: {}", peersFile, e.toString());
+            }
+        }
 
         LOG.info("Узел {} стартовал на порту {} (selfNodeId={})",
                 shortNode(selfNodeId), realPort, shortNode(selfNodeId));
@@ -164,6 +276,21 @@ public final class NodeApplication implements AutoCloseable {
         //    PeerManager позднее.
         if (!config.getSeedNodes().isEmpty()) {
             bootstrap.bootstrap(blockchain.height());
+        }
+
+        // 4. Auto re-replication (день 10). По умолчанию запускаем —
+        //    daemon-узлы должны обслуживать свои файлы автоматически.
+        //    Можно отключить через builder().disableRepair() (для тестов).
+        if (repairEnabled) {
+            repairService.start();
+        }
+
+        // 5. Физический GC шардов (день 11, ТЗ п. 4.1.1.4.3). Тоже включён
+        //    по умолчанию для daemon-узла. Можно выключить через
+        //    builder().disableGc() (некоторые тесты не должны видеть
+        //    непредсказуемого удаления шардов).
+        if (gcEnabled) {
+            gcService.start();
         }
     }
 
@@ -186,6 +313,21 @@ public final class NodeApplication implements AutoCloseable {
     /** Доступ к peer manager — для тестов и диагностики (вывод количества пиров). */
     public PeerManager peerManager() {
         return peerManager;
+    }
+
+    /** Доступ к сервису синхронизации блоков — для тестов и диагностики. */
+    public BlockSyncService blockSync() {
+        return blockSync;
+    }
+
+    /** Доступ к сервису авто-репликации — для тестов и диагностики. */
+    public RepairService repairService() {
+        return repairService;
+    }
+
+    /** Доступ к сервису сборки мусора шардов — для тестов и диагностики. */
+    public ShardGcService gcService() {
+        return gcService;
     }
 
     /** Снимок известных пиров (только с настоящими nodeId). */
@@ -219,9 +361,15 @@ public final class NodeApplication implements AutoCloseable {
         Transaction tx = uploader.uploadFile(file, storers);
 
         // Persist новый блок, если есть persistence.
+        Block newBlock = blockchain.getLatestBlock();
         if (blockchainStore != null) {
-            blockchainStore.saveBlock(blockchain.getLatestBlock());
+            blockchainStore.saveBlock(newBlock);
         }
+
+        // День 8: рассылаем новый блок всем активным пирам, чтобы транзакция
+        // распространилась по сети. Это закрывает ТЗ п. 4.1.1.3.4 (longest
+        // chain rule) — после broadcast'а у всех соседей цепи равной длины.
+        blockSync.broadcastNewBlock(newBlock);
         return tx;
     }
 
@@ -255,11 +403,86 @@ public final class NodeApplication implements AutoCloseable {
         return blockchain.listByOwner(selfNodeId);
     }
 
+    // ================================================================
+    // День 9: ACL и DELETE — операции в блокчейне без сетевого I/O
+    // ================================================================
+
+    /**
+     * Расшаривает файл с другим пользователем.
+     * <p>
+     * После добавления ACL-транзакции в локальный блокчейн broadcast'им
+     * новый блок всем активным пирам — чтобы recipient (если он сейчас
+     * онлайн) увидел свой ACL и мог скачать файл.
+     *
+     * @param originalTxId          id оригинальной UPLOAD-транзакции
+     * @param recipientPublicKeyB64 публичный ключ recipient'а (Base64 X.509)
+     * @return ACL-транзакция (уже в локальном блокчейне)
+     * @see ru.hse.jblockstorage.blockchain.Blockchain#findAclFor
+     */
+    public Transaction shareFile(String originalTxId, String recipientPublicKeyB64) {
+        if (!started) throw new IllegalStateException("Узел не запущен");
+
+        Transaction acl = uploader.shareFile(originalTxId, recipientPublicKeyB64);
+        Block newBlock = blockchain.getLatestBlock();
+        if (blockchainStore != null) {
+            blockchainStore.saveBlock(newBlock);
+        }
+        blockSync.broadcastNewBlock(newBlock);
+        return acl;
+    }
+
+    /**
+     * Логически удаляет файл (ТЗ п. 4.1.1.4.3).
+     * <p>
+     * Физически шарды на узлах-хранителях не стираются — это была бы
+     * отдельная задача Garbage Collection. После DELETE файл исчезает
+     * из {@link #listMyFiles}, и попытка {@link #downloadFile} вернёт
+     * ошибку «файл удалён».
+     *
+     * @return DELETE-транзакция (уже в локальном блокчейне)
+     */
+    public Transaction deleteFile(String originalTxId) {
+        if (!started) throw new IllegalStateException("Узел не запущен");
+
+        Transaction del = uploader.deleteFile(originalTxId);
+        Block newBlock = blockchain.getLatestBlock();
+        if (blockchainStore != null) {
+            blockchainStore.saveBlock(newBlock);
+        }
+        blockSync.broadcastNewBlock(newBlock);
+        return del;
+    }
+
+    /**
+     * Список файлов, которые мне расшарили другие пользователи (ACL).
+     * Это «вторая половина» {@link #listMyFiles} — позволяет в GUI
+     * показать раздел «Расшаренное со мной».
+     */
+    public List<Transaction> listAccessibleFiles() {
+        return blockchain.listByRecipient(selfNodeId);
+    }
+
     @Override
     public synchronized void close() {
         if (closed) return;
         closed = true;
+
+        // День 10: сохраняем таблицу пиров, ПОКА peerManager ещё имеет состояние.
+        // Это первое, что делаем при close — чтобы данные не потерять, даже если
+        // что-то ниже бросит исключение.
+        if (peersFile != null) {
+            try {
+                Path parent = peersFile.toAbsolutePath().getParent();
+                if (parent != null) Files.createDirectories(parent);
+                peerManager.savePeers(peersFile);
+            } catch (Exception e) {
+                LOG.warn("Не удалось сохранить peers в {}: {}", peersFile, e.toString());
+            }
+        }
+
         // Останавливаем в обратном порядке создания.
+        try { gcService.close();        } catch (Exception ignored) {}
+        try { repairService.close();   } catch (Exception ignored) {}
         try { peerManager.close();      } catch (Exception ignored) {}
         try { client.close();           } catch (Exception ignored) {}
         try { server.close();           } catch (Exception ignored) {}
@@ -289,6 +512,14 @@ public final class NodeApplication implements AutoCloseable {
         private Path blockchainDir;
         private String bindHost;
         private int replicationFactor = -1;
+        private boolean repairEnabled = true;
+        private java.time.Duration repairInterval;
+        private boolean gcEnabled = true;
+        private java.time.Duration gcInterval;
+        private Path peersFileExplicit;
+        private boolean peersFileDisabled = false;
+        private java.time.Duration peersAutoSaveInterval;
+        private boolean peersAutoSaveDisabled = false;
 
         public Builder config(NodeConfig v) { this.config = v; return this; }
         public Builder keys(KeyPair v) { this.keys = v; return this; }
@@ -301,6 +532,65 @@ public final class NodeApplication implements AutoCloseable {
         public Builder bindHost(String v) { this.bindHost = v; return this; }
         /** Если &gt; 0 — переопределяет {@code FileUploader.DEFAULT_REPLICATION_FACTOR}. */
         public Builder replicationFactor(int v) { this.replicationFactor = v; return this; }
+
+        /**
+         * Включить/выключить автоматическую re-репликацию (день 10).
+         * По умолчанию включена. Тесты, которым важна стабильность счёта
+         * блоков, могут выключить через {@code disableRepair()}.
+         */
+        public Builder disableRepair() { this.repairEnabled = false; return this; }
+
+        /**
+         * Период проверки re-репликации. По умолчанию 30с — для daemon-узла.
+         * В интеграционных тестах ставится 1-2с, чтобы repair успевал отработать
+         * за разумное время.
+         */
+        public Builder repairInterval(java.time.Duration v) { this.repairInterval = v; return this; }
+
+        /**
+         * Явный путь к файлу persistent-таблицы пиров (день 10).
+         * По умолчанию — {@code <parent of shardsDir>/peers.json}.
+         */
+        public Builder peersFile(Path v) { this.peersFileExplicit = v; return this; }
+
+        /**
+         * Полностью отключить persistence пиров — таблица не сохраняется
+         * и не загружается. Удобно для тестов с {@code @TempDir} или
+         * случаев, когда нужна гарантированно «чистая» сеть.
+         */
+        public Builder disablePeersPersistence() { this.peersFileDisabled = true; return this; }
+
+        /**
+         * Включить/выключить физический GC шардов (день 11, ТЗ п. 4.1.1.4.3).
+         * По умолчанию включён. Тесты, которым важно сохранение шардов
+         * (например, repair-тесты с DELETE) могут выключить через
+         * {@code disableGc()}.
+         */
+        public Builder disableGc() { this.gcEnabled = false; return this; }
+
+        /**
+         * Период проверки GC. По умолчанию 60с — для daemon-узла.
+         * В тестах ставится 100мс–1с, чтобы GC успевал отработать
+         * за разумное время.
+         */
+        public Builder gcInterval(java.time.Duration v) { this.gcInterval = v; return this; }
+
+        /**
+         * Интервал периодического автосохранения {@code peers.json} (день 11).
+         * По умолчанию 60с. Защищает от потери таблицы при SIGKILL.
+         */
+        public Builder peersAutoSaveInterval(java.time.Duration v) {
+            this.peersAutoSaveInterval = v; return this;
+        }
+
+        /**
+         * Отключить периодическое автосохранение {@code peers.json}. Save
+         * на close() остаётся (пока не отключён через
+         * {@link #disablePeersPersistence()}).
+         */
+        public Builder disablePeersAutoSave() {
+            this.peersAutoSaveDisabled = true; return this;
+        }
 
         public NodeApplication build() throws IOException {
             return new NodeApplication(this);

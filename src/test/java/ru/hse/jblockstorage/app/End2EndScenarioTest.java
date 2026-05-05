@@ -178,6 +178,8 @@ class End2EndScenarioTest {
                 .bindHost("127.0.0.1")
                 .shardsDir(baseDir.resolve("shards"))
                 .replicationFactor(replicationFactor)
+                .disableRepair()
+                .disablePeersPersistence()
                 .build();
         app.start();
         apps.add(app);

@@ -139,4 +139,46 @@ class ShardStorageTest {
         storage.save(hash, data);
         assertArrayEquals(data, storage.load(hash).orElseThrow());
     }
+
+    // ---------- День 11: list() для GC шардов ----------
+
+    @Test
+    void listEnumeratesAllSavedShards(@TempDir Path tmp) throws IOException {
+        ShardStorage storage = new ShardStorage(tmp);
+        byte[] a = "a".getBytes();
+        byte[] b = "b".getBytes();
+        byte[] c = "c".getBytes();
+        storage.save(hashOf(a), a);
+        storage.save(hashOf(b), b);
+        storage.save(hashOf(c), c);
+
+        var list = storage.list();
+        assertEquals(3, list.size());
+        assertTrue(list.contains(hashOf(a)));
+        assertTrue(list.contains(hashOf(b)));
+        assertTrue(list.contains(hashOf(c)));
+    }
+
+    @Test
+    void listIgnoresNonHashFiles(@TempDir Path tmp) throws IOException {
+        // Если в директории завелись посторонние файлы (например, .tmp от
+        // прерванной записи или README, забытый разработчиком), list()
+        // их не должен возвращать — иначе GC попытался бы их обработать.
+        ShardStorage storage = new ShardStorage(tmp);
+        byte[] data = "real-shard".getBytes();
+        storage.save(hashOf(data), data);
+
+        Files.writeString(tmp.resolve("README.txt"), "not a shard");
+        Files.writeString(tmp.resolve("0123abc.tmp"), "leftover");
+
+        var list = storage.list();
+        assertEquals(1, list.size());
+        assertEquals(hashOf(data), list.get(0));
+    }
+
+    @Test
+    void listOnEmptyDirReturnsEmpty(@TempDir Path tmp) throws IOException {
+        ShardStorage storage = new ShardStorage(tmp);
+        assertTrue(storage.list().isEmpty());
+    }
 }
