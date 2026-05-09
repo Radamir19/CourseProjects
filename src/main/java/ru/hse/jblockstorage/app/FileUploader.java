@@ -15,6 +15,7 @@ import ru.hse.jblockstorage.network.PutShardMessage;
 import ru.hse.jblockstorage.storage.FileChunker;
 import ru.hse.jblockstorage.storage.MerkleTree;
 import ru.hse.jblockstorage.storage.Shard;
+import ru.hse.jblockstorage.storage.ShardStorage;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
@@ -78,6 +79,20 @@ public final class FileUploader {
     private final Blockchain blockchain;
     private final int chunkSize;
     private final int replicationFactor;
+    /**
+     * Локальное хранилище шардов самого узла. Если не {@code null} — узел
+     * считает себя одним из потенциальных хранителей, и в {@link #pushShardsToStorers}
+     * для self-«хранителя» используется локальный путь сохранения вместо
+     * сетевого PUT_SHARD/ACK round-trip. Это решает архитектурное
+     * ограничение «нужно ≥3 _других_ узлов»: теперь достаточно ≥3 узлов
+     * всего (self + 2 других при replicationFactor=3), что соответствует
+     * семантике replication factor в leaderless replication по Клеппману.
+     *
+     * <p>Может быть {@code null} для обратной совместимости (старые
+     * тесты, которые конструировали FileUploader без ShardStorage,
+     * продолжают работать как раньше).
+     */
+    private final ShardStorage selfStorage;
 
     /**
      * Pending acknowledgements: shardHash → future, который завершится
@@ -90,11 +105,22 @@ public final class FileUploader {
     public FileUploader(PublicKey ownerPublicKey, PrivateKey ownerPrivateKey,
                         Blockchain blockchain) {
         this(ownerPublicKey, ownerPrivateKey, blockchain,
-             FileChunker.DEFAULT_CHUNK_SIZE, DEFAULT_REPLICATION_FACTOR);
+             FileChunker.DEFAULT_CHUNK_SIZE, DEFAULT_REPLICATION_FACTOR, null);
     }
 
     public FileUploader(PublicKey ownerPublicKey, PrivateKey ownerPrivateKey,
                         Blockchain blockchain, int chunkSize, int replicationFactor) {
+        this(ownerPublicKey, ownerPrivateKey, blockchain, chunkSize, replicationFactor, null);
+    }
+
+    /**
+     * Полный конструктор с поддержкой self-storage. Если {@code selfStorage}
+     * не {@code null}, узел будет включать самого себя в список потенциальных
+     * хранителей при upload — шарды сохраняются локально без round-trip по сети.
+     */
+    public FileUploader(PublicKey ownerPublicKey, PrivateKey ownerPrivateKey,
+                        Blockchain blockchain, int chunkSize, int replicationFactor,
+                        ShardStorage selfStorage) {
         this.ownerPublicKey = Objects.requireNonNull(ownerPublicKey, "ownerPublicKey");
         this.ownerPrivateKey = Objects.requireNonNull(ownerPrivateKey, "ownerPrivateKey");
         this.ownerPublicKeyBase64 = KeyManager.publicKeyToBase64(ownerPublicKey);
@@ -103,6 +129,7 @@ public final class FileUploader {
         if (replicationFactor < 1) throw new IllegalArgumentException("replicationFactor должен быть ≥ 1");
         this.chunkSize = chunkSize;
         this.replicationFactor = replicationFactor;
+        this.selfStorage = selfStorage; // null допустимо
     }
 
     /**
@@ -119,10 +146,27 @@ public final class FileUploader {
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(availableStorers, "availableStorers");
 
-        if (availableStorers.size() < replicationFactor) {
+        // Если у нас есть локальное хранилище шардов, мы тоже можем быть
+        // хранителем — добавляем self в начало списка. Это позволяет
+        // запускать сеть из 3 узлов (replication=3): self + 2 других.
+        // Без этого приходилось требовать ≥3 _других_ узлов помимо
+        // отправителя, что неестественно для leaderless replication.
+        // selfStorer представлен особым StorerHandle с session=null —
+        // признак, что для него используется локальный путь сохранения.
+        List<StorerHandle> effectiveStorers;
+        if (selfStorage != null
+                && availableStorers.stream().noneMatch(h -> ownerPublicKeyBase64.equals(h.nodeId()))) {
+            effectiveStorers = new ArrayList<>(availableStorers.size() + 1);
+            effectiveStorers.add(new StorerHandle(ownerPublicKeyBase64, null));
+            effectiveStorers.addAll(availableStorers);
+        } else {
+            effectiveStorers = availableStorers;
+        }
+
+        if (effectiveStorers.size() < replicationFactor) {
             throw new IllegalStateException(
                     "Недостаточно хранителей: нужно ≥" + replicationFactor
-                            + ", есть " + availableStorers.size());
+                            + ", есть " + effectiveStorers.size());
         }
 
         // ШАГ 1-3: AES-ключ + шифрование файла + шифрование ключа RSA-OAEP
@@ -155,8 +199,10 @@ public final class FileUploader {
 
         // ШАГ 6: выбор K хранителей.
         // Простая стратегия: первые K из доступных. Сохраняем порядок —
-        // потом используется тестом «отключи первого».
-        List<StorerHandle> chosen = availableStorers.stream()
+        // потом используется тестом «отключи первого». Если есть
+        // selfStorage — self стоит первым (см. выше), что соответствует
+        // поведению «сначала пишем себе, потом другим».
+        List<StorerHandle> chosen = effectiveStorers.stream()
                 .limit(replicationFactor)
                 .toList();
 
@@ -202,6 +248,35 @@ public final class FileUploader {
         List<StorageReceipt> receipts = new ArrayList<>();
 
         for (StorerHandle storer : storers) {
+            // SELF-PATH: если StorerHandle представляет нас самих
+            // (nodeId совпадает с нашим публичным ключом и session==null —
+            // признак self-handle, см. uploadFile), сохраняем шард
+            // локально и сами выписываем receipt. Никаких сетевых
+            // round-trip — это корректно, потому что self-узел уже
+            // имеет свой приватный ключ для подписи receipt'а.
+            boolean isSelf = storer.session() == null
+                    && ownerPublicKeyBase64.equals(storer.nodeId())
+                    && selfStorage != null;
+            if (isSelf) {
+                for (Shard shard : shards) {
+                    try {
+                        selfStorage.save(shard.hashHex(), shard.data());
+                    } catch (IOException e) {
+                        throw new IllegalStateException(
+                                "Не удалось сохранить локальный шард "
+                                        + shard.hashHex() + ": " + e.getMessage(), e);
+                    }
+                    StorageReceipt receipt = StorageReceipt.create(
+                            preliminaryTxId,
+                            ownerPublicKeyBase64,
+                            shard.hashHex(),
+                            ownerPrivateKey);
+                    receipts.add(receipt);
+                }
+                LOG.debug("Self-storage: сохранено {} шардов локально", shards.size());
+                continue;
+            }
+
             for (Shard shard : shards) {
                 CompletableFuture<PutShardAckMessage> future = new CompletableFuture<>();
                 AckKey key = new AckKey(storer.nodeId(), shard.hashHex());

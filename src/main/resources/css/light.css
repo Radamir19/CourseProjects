@@ -1,0 +1,79 @@
+/* ====================================================================
+ * JBlockStorage · light.css
+ * ----------------------------------------------------------------
+ * Цветовые токены светлой темы. На основе macOS system colors —
+ * для естественного вида на основной платформе разработки.
+ *
+ * Все имена синхронизированы с base.css.
+ * ==================================================================== */
+
+.root {
+    /* Базовые фоны */
+    -color-bg-primary:   #f5f5f7;
+    -color-bg-secondary: #e8e8ed;
+
+    /* Карточки */
+    -color-card-bg:     rgba(255, 255, 255, 0.85);
+    -color-card-border: rgba(0, 0, 0, 0.08);
+    -color-border:      rgba(0, 0, 0, 0.10);
+
+    /* Тени */
+    -color-shadow: rgba(0, 0, 0, 0.06);
+
+    /* Текст */
+    -color-text-primary:   #1d1d1f;
+    -color-text-secondary: #515154;
+    -color-text-hint:      #8e8e93;
+
+    /* Акцент (Apple system blue) */
+    -color-accent:         #007aff;
+    -color-accent-hover:   #0066d6;
+    -color-accent-pressed: #0051a8;
+
+    /* Кнопки */
+    -color-button-secondary-bg:    rgba(0, 0, 0, 0.04);
+    -color-button-secondary-hover: rgba(0, 0, 0, 0.07);
+
+    /* Статусы */
+    -color-success: #34c759;
+    -color-warning: #ff9500;
+    -color-danger:  #d63532;
+    -color-danger-bg-hover: rgba(214, 53, 50, 0.08);
+
+    /* Жёлтые предупреждения (warning-card) */
+    -color-warning-bg:     rgba(255, 149, 0, 0.10);
+    -color-warning-border: rgba(255, 149, 0, 0.40);
+
+    /* Onboarding redesign: полупрозрачные слои поверх градиента */
+    -color-sidebar-bg:        rgba(255, 255, 255, 0.50);
+    -color-sidebar-card-bg:   rgba(255, 255, 255, 0.70);
+    -color-accent-bg:         rgba(0, 122, 255, 0.10);
+    -color-accent-bg-strong:  rgba(0, 122, 255, 0.15);
+    -color-accent-bg-soft:    rgba(0, 122, 255, 0.04);
+    -color-accent-border-soft: rgba(0, 122, 255, 0.20);
+    -color-mnemonic-cell-bg:  rgba(0, 0, 0, 0.025);
+    -color-step-pending-bg:   rgba(0, 0, 0, 0.08);
+
+    /* Модальные диалоги — сплошной фон поверх scrim, не прозрачный */
+    -color-modal-bg:     #f5f5f7;
+    -color-modal-border: rgba(0, 0, 0, 0.15);
+    -color-modal-inner-bg:     #ffffff;
+    -color-modal-inner-border: rgba(0, 0, 0, 0.10);
+
+    /* Категории файлов — приглушённые, как в macOS Finder */
+    -color-pdf-bg:     rgba(255, 149, 0, 0.12);
+    -color-pdf-border: rgba(255, 149, 0, 0.30);
+    -color-pdf-fg:     #c25e00;
+
+    -color-doc-bg:     rgba(0, 122, 255, 0.10);
+    -color-doc-border: rgba(0, 122, 255, 0.28);
+    -color-doc-fg:     #005bbb;
+
+    -color-img-bg:     rgba(52, 199, 89, 0.12);
+    -color-img-border: rgba(52, 199, 89, 0.28);
+    -color-img-fg:     #1f7a39;
+
+    -color-zip-bg:     rgba(142, 142, 147, 0.14);
+    -color-zip-border: rgba(142, 142, 147, 0.28);
+    -color-zip-fg:     #515154;
+}

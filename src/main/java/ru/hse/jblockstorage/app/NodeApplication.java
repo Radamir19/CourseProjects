@@ -148,10 +148,16 @@ public final class NodeApplication implements AutoCloseable {
         this.peerManager = new PeerManager(config, selfNodeId, blockchain::height);
 
         this.storageService = new StorageNodeService(selfNodeId, privateKey, shardStorage);
+        // Передаём shardStorage в FileUploader: с ним self становится одним
+        // из потенциальных хранителей (см. FileUploader.uploadFile —
+        // self-path вместо сетевого round-trip). Это решает «нужно ≥3
+        // других узлов» в семантике replication factor.
         this.uploader = new FileUploader(publicKey, privateKey, blockchain,
                 FileChunker.DEFAULT_CHUNK_SIZE,
-                b.replicationFactor > 0 ? b.replicationFactor : FileUploader.DEFAULT_REPLICATION_FACTOR);
-        this.downloader = new FileDownloader(privateKey, selfNodeId, blockchain);
+                b.replicationFactor > 0 ? b.replicationFactor : FileUploader.DEFAULT_REPLICATION_FACTOR,
+                shardStorage);
+        this.downloader = new FileDownloader(privateKey, selfNodeId, blockchain,
+                selfNodeId, shardStorage);
 
         // День 8: блок-синхронизация. Persistence-хук на BlockchainStore,
         // если он есть — это закрывает требование «блок, полученный от
@@ -276,6 +282,15 @@ public final class NodeApplication implements AutoCloseable {
         //    PeerManager позднее.
         if (!config.getSeedNodes().isEmpty()) {
             bootstrap.bootstrap(blockchain.height());
+            // День 15 fix: периодический retry на случай, если на момент
+            // первого bootstrap'а seed-узлы ещё не подняли TCP-сервера
+            // (типичный race в демо-сценарии «3 узла на одной машине»).
+            // Условие срабатывания внутри: peerManager.size() == 0.
+            // Как только хоть один пир появится — retry перестаёт что-либо
+            // делать; gossip разнесёт остальную сеть.
+            bootstrap.startPeriodicRetry(
+                    java.time.Duration.ofSeconds(30),
+                    () -> blockchain.height());
         }
 
         // 4. Auto re-replication (день 10). По умолчанию запускаем —
@@ -383,6 +398,18 @@ public final class NodeApplication implements AutoCloseable {
      */
     public void downloadFile(String txId, Path output)
             throws IOException, InterruptedException, TimeoutException {
+        downloadFile(txId, output, null);
+    }
+
+    /**
+     * Расширенный {@link #downloadFile(String, Path)} с поддержкой
+     * {@link DownloadProgressListener} — день 15, ТЗ п. 4.1.5.3.
+     * Listener получает события на каждом шаге (старт, попытка узла,
+     * успех/сбой шарда, общее завершение). Если {@code null} — поведение
+     * идентично 2-параметровой версии.
+     */
+    public void downloadFile(String txId, Path output, DownloadProgressListener listener)
+            throws IOException, InterruptedException, TimeoutException {
         if (!started) throw new IllegalStateException("Узел не запущен");
 
         Optional<Transaction> txOpt = blockchain.findByTxId(txId);
@@ -395,7 +422,7 @@ public final class NodeApplication implements AutoCloseable {
         // Если у нас есть локальная копия шардов (мы сами были одним из storers),
         // FileDownloader всё равно сходит в сеть — на этом MVP не оптимизируем,
         // зато проще и единообразнее.
-        downloader.downloadFile(tx, sessions, output);
+        downloader.downloadFile(tx, sessions, output, listener);
     }
 
     /** Список транзакций текущего пользователя из локального блокчейна. */
@@ -481,6 +508,7 @@ public final class NodeApplication implements AutoCloseable {
         }
 
         // Останавливаем в обратном порядке создания.
+        try { bootstrap.close();        } catch (Exception ignored) {}
         try { gcService.close();        } catch (Exception ignored) {}
         try { repairService.close();   } catch (Exception ignored) {}
         try { peerManager.close();      } catch (Exception ignored) {}

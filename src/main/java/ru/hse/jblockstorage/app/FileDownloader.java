@@ -10,6 +10,7 @@ import ru.hse.jblockstorage.crypto.RsaOaep;
 import ru.hse.jblockstorage.network.GetShardMessage;
 import ru.hse.jblockstorage.network.PeerSession;
 import ru.hse.jblockstorage.network.ShardResponseMessage;
+import ru.hse.jblockstorage.storage.ShardStorage;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
@@ -80,13 +81,33 @@ public final class FileDownloader {
     private final Map<String, CompletableFuture<ShardResponseMessage>> pendingShards = new ConcurrentHashMap<>();
 
     /**
+     * Локальное хранилище шардов самого узла. Если не {@code null} и
+     * среди хранителей шарда оказывается self (см. {@link #selfNodeId}),
+     * шард читается локально вместо сетевого GET_SHARD round-trip.
+     * Симметрично self-path в {@link FileUploader} — без этого узел не
+     * может скачать собственный файл, если сам же хранит единственную
+     * живую реплику (типично для replication=2 и одного упавшего пира).
+     *
+     * <p>Может быть {@code null} для обратной совместимости (старые
+     * тесты, конструировавшие FileDownloader без storage).
+     */
+    private final ShardStorage selfStorage;
+
+    /**
+     * Наш {@code nodeId} = публичный ключ Base64. Нужен, чтобы в
+     * {@link #fetchShard} понять «этот хранитель — это я» и дернуть
+     * {@link #selfStorage} вместо сети. {@code null} в старом API.
+     */
+    private final String selfNodeId;
+
+    /**
      * Старый конструктор дня 6 — без поддержки ACL.
      * Скачивание возможно только если транзакция принадлежит этому же владельцу
      * (приватный ключ, переданный сюда). Используется в тестах дня 6, которые
      * не работают с ACL.
      */
     public FileDownloader(PrivateKey ownerPrivateKey) {
-        this(ownerPrivateKey, null, null);
+        this(ownerPrivateKey, null, null, null, null);
     }
 
     /**
@@ -99,9 +120,25 @@ public final class FileDownloader {
     public FileDownloader(PrivateKey ownerPrivateKey,
                           String myPublicKeyBase64,
                           ru.hse.jblockstorage.blockchain.Blockchain blockchain) {
+        this(ownerPrivateKey, myPublicKeyBase64, blockchain, null, null);
+    }
+
+    /**
+     * Полный конструктор с поддержкой self-storage (день 13 fix3, симметрично
+     * {@link FileUploader}). Если {@code selfStorage != null} и self
+     * упомянут в {@link Transaction#getReplicas()} как хранитель,
+     * скачивание идёт через локальный диск, а не через сеть.
+     */
+    public FileDownloader(PrivateKey ownerPrivateKey,
+                          String myPublicKeyBase64,
+                          ru.hse.jblockstorage.blockchain.Blockchain blockchain,
+                          String selfNodeId,
+                          ShardStorage selfStorage) {
         this.ownerPrivateKey = Objects.requireNonNull(ownerPrivateKey, "ownerPrivateKey");
         this.myPublicKeyBase64 = myPublicKeyBase64;
         this.blockchain = blockchain;
+        this.selfNodeId = selfNodeId;
+        this.selfStorage = selfStorage;
     }
 
     /**
@@ -116,6 +153,26 @@ public final class FileDownloader {
     public void downloadFile(Transaction tx,
                              Map<String, PeerSession> storerSessions,
                              Path outputFile)
+            throws IOException, InterruptedException, TimeoutException {
+        downloadFile(tx, storerSessions, outputFile, null);
+    }
+
+    /**
+     * Расширенная точка входа с {@link DownloadProgressListener} —
+     * день 15, ТЗ п. 4.1.5.3. Listener получает события на каждом шаге
+     * (начало, каждый шард, успех/сбой), что позволяет UI показать
+     * прогресс-бар, скорость и список узлов в реальном времени.
+     *
+     * <p>Если {@code listener == null}, поведение полностью идентично
+     * старому 3-параметровому варианту. Это сохраняет совместимость
+     * со всеми существующими тестами.
+     *
+     * @param listener колбек событий или {@code null}
+     */
+    public void downloadFile(Transaction tx,
+                             Map<String, PeerSession> storerSessions,
+                             Path outputFile,
+                             DownloadProgressListener listener)
             throws IOException, InterruptedException, TimeoutException {
 
         Objects.requireNonNull(tx, "tx");
@@ -151,12 +208,29 @@ public final class FileDownloader {
                 replicaSource.getReplicas().size(),
                 replicaSource == tx ? "" : ", REPAIR применён");
 
+        // День 15: уведомляем listener о старте — UI узнает имя/размер/шарды.
+        if (listener != null) {
+            try {
+                listener.onStart(tx.getFileName(), tx.getFileSize(), orderedShards.size());
+            } catch (Exception e) {
+                LOG.debug("Listener onStart кинул: {}", e.toString());
+            }
+        }
+
         // 2. Расшифровка AES-ключа — делаем это ПЕРВЫМ, ДО скачивания шардов.
         //    Если у нас нет доступа к файлу (нет своего ключа и нет ACL),
         //    лучше упасть с явным "ACL не найден", чем сначала тянуть мегабайты
         //    шардов по сети, а уже потом обнаружить, что расшифровать их нечем.
         //    Это поведение ожидается тестом charlieWithoutAclCannotDownload.
-        byte[] rawAesKey = resolveAesKey(tx);
+        byte[] rawAesKey;
+        try {
+            rawAesKey = resolveAesKey(tx);
+        } catch (RuntimeException e) {
+            if (listener != null) {
+                try { listener.onFailed(e); } catch (Exception ignore) {}
+            }
+            throw e;
+        }
 
         try {
             // 3. Скачиваем каждый шард, перебирая хранителей
@@ -164,11 +238,16 @@ public final class FileDownloader {
             for (int i = 0; i < orderedShards.size(); i++) {
                 String hash = orderedShards.get(i);
                 List<String> storers = shardToStorers.getOrDefault(hash, List.of());
-                byte[] data = fetchShard(hash, storers, storerSessions);
+                // День 15: per-shard уведомления через расширенный fetchShard
+                byte[] data = fetchShard(hash, storers, storerSessions, i, listener);
                 if (data == null) {
-                    throw new IllegalStateException(
+                    IllegalStateException ex = new IllegalStateException(
                             "Не удалось скачать шард " + hash.substring(0, 16)
                                     + "… ни от одного из " + storers.size() + " известных хранителей");
+                    if (listener != null) {
+                        try { listener.onFailed(ex); } catch (Exception ignore) {}
+                    }
+                    throw ex;
                 }
                 collectedShards[i] = data;
             }
@@ -189,13 +268,28 @@ public final class FileDownloader {
 
             // 6. Sanity check — размер должен совпадать с записанным в транзакции
             if (plaintext.length != tx.getFileSize()) {
-                throw new IllegalStateException(
+                IllegalStateException ex = new IllegalStateException(
                         "Размер расшифрованного файла " + plaintext.length
                                 + " не совпадает с заявленным в транзакции " + tx.getFileSize());
+                if (listener != null) {
+                    try { listener.onFailed(ex); } catch (Exception ignore) {}
+                }
+                throw ex;
             }
 
             Files.write(outputFile, plaintext);
             LOG.info("Файл успешно восстановлен: {} ({} байт)", outputFile, plaintext.length);
+            if (listener != null) {
+                try { listener.onFinished(); } catch (Exception ignore) {}
+            }
+        } catch (RuntimeException | IOException e) {
+            // На любой неожиданный сбой — тоже сигнализируем listener'у.
+            // Но не в случае, если onFailed уже вызывался выше (для
+            // конкретных проверенных исключений). Поэтому проверим тип.
+            if (listener != null && !(e instanceof IllegalStateException)) {
+                try { listener.onFailed(e); } catch (Exception ignore) {}
+            }
+            throw e;
         } finally {
             // Затираем raw AES-ключ из памяти для гигиены — даже если выше
             // случилось исключение (например, шард не скачался).
@@ -267,10 +361,88 @@ public final class FileDownloader {
     byte[] fetchShard(String hashHex, List<String> storerNodeIds,
                       Map<String, PeerSession> sessions)
             throws InterruptedException {
+        return fetchShard(hashHex, storerNodeIds, sessions, -1, null);
+    }
+
+    /**
+     * Расширенный {@link #fetchShard(String, List, Map)} с уведомлениями
+     * для UI (день 15). Каждая попытка обращения к хранителю
+     * репортится через {@code listener}: до — {@code onShardStarted},
+     * успех — {@code onShardFinished}, неуспех — {@code onShardFailed}.
+     *
+     * @param shardIndex индекс шарда для UI; -1 если listener=null
+     * @param listener   {@code null} → метод ведёт себя как старый
+     */
+    byte[] fetchShard(String hashHex, List<String> storerNodeIds,
+                      Map<String, PeerSession> sessions,
+                      int shardIndex,
+                      DownloadProgressListener listener)
+            throws InterruptedException {
         for (String nodeId : storerNodeIds) {
+            // Уведомляем listener'а о попытке. Если у нас self-storage
+            // путь (см. ниже), это будет корректно "self".
+            if (listener != null) {
+                try { listener.onShardStarted(shardIndex, nodeId); } catch (Exception ignore) {}
+            }
+
+            // SELF-PATH: если в списке хранителей мы сами и у нас есть
+            // локальное хранилище — читаем шард локально без сети.
+            // Это критично для сценария «replication=2, один пир упал»:
+            // оставшийся хранитель = self, и без локального чтения
+            // download падает с «не удалось скачать» (см. fix3).
+            if (selfStorage != null && nodeId.equals(selfNodeId)) {
+                try {
+                    java.util.Optional<byte[]> local = selfStorage.load(hashHex);
+                    if (local.isPresent()) {
+                        byte[] data = local.get();
+                        // Проверка целостности всё равно полезна — на случай
+                        // повреждения локального файла.
+                        String actualHash = CryptoUtils.toHex(CryptoUtils.applySha256(data));
+                        if (actualHash.equals(hashHex)) {
+                            LOG.debug("Self-storage: шард {} прочитан локально ({} байт)",
+                                    hashHex.substring(0, 8) + "…", data.length);
+                            if (listener != null) {
+                                try { listener.onShardFinished(shardIndex, nodeId, data.length); }
+                                catch (Exception ignore) {}
+                            }
+                            return data;
+                        } else {
+                            LOG.warn("Self-storage: локальный шард {} испорчен (хеш не сходится), пробуем сеть",
+                                    hashHex.substring(0, 8) + "…");
+                            if (listener != null) {
+                                try { listener.onShardFailed(shardIndex, nodeId, "хеш не сходится"); }
+                                catch (Exception ignore) {}
+                            }
+                        }
+                    } else {
+                        LOG.debug("Self-storage: шарда {} локально нет, пробуем сеть",
+                                hashHex.substring(0, 8) + "…");
+                        if (listener != null) {
+                            try { listener.onShardFailed(shardIndex, nodeId, "нет локально"); }
+                            catch (Exception ignore) {}
+                        }
+                    }
+                } catch (IOException e) {
+                    LOG.warn("Self-storage: ошибка чтения {}: {}, пробуем сеть",
+                            hashHex.substring(0, 8) + "…", e.toString());
+                    if (listener != null) {
+                        try { listener.onShardFailed(shardIndex, nodeId, e.toString()); }
+                        catch (Exception ignore) {}
+                    }
+                }
+                // Если самосчитать не удалось — fall through, дальше идёт сеть.
+                // Но self в списке хранителей будет один раз, поэтому здесь
+                // continue: следующий nodeId в storerNodeIds будет уже не self.
+                continue;
+            }
+
             PeerSession session = sessions.get(nodeId);
             if (session == null || !session.isActive()) {
                 LOG.debug("Хранитель {} недоступен, пробуем следующего", nodeId);
+                if (listener != null) {
+                    try { listener.onShardFailed(shardIndex, nodeId, "сессия неактивна"); }
+                    catch (Exception ignore) {}
+                }
                 continue;
             }
 
@@ -284,9 +456,17 @@ public final class FileDownloader {
             } catch (TimeoutException e) {
                 LOG.debug("Хранитель {} не ответил за {}мс — пробуем следующего",
                         nodeId, SHARD_TIMEOUT_MILLIS);
+                if (listener != null) {
+                    try { listener.onShardFailed(shardIndex, nodeId, "таймаут"); }
+                    catch (Exception ignore) {}
+                }
                 continue;
             } catch (java.util.concurrent.ExecutionException e) {
                 LOG.debug("Сбой при ожидании шарда от {}: {}", nodeId, e.toString());
+                if (listener != null) {
+                    try { listener.onShardFailed(shardIndex, nodeId, e.toString()); }
+                    catch (Exception ignore) {}
+                }
                 continue;
             } finally {
                 pendingShards.remove(hashHex);
@@ -295,6 +475,10 @@ public final class FileDownloader {
             byte[] data = resp.getData();
             if (data == null) {
                 LOG.debug("Хранитель {} ответил, но шарда не имеет — следующий", nodeId);
+                if (listener != null) {
+                    try { listener.onShardFailed(shardIndex, nodeId, "шарда нет у хранителя"); }
+                    catch (Exception ignore) {}
+                }
                 continue;
             }
 
@@ -302,9 +486,17 @@ public final class FileDownloader {
             String actualHash = CryptoUtils.toHex(CryptoUtils.applySha256(data));
             if (!actualHash.equals(hashHex)) {
                 LOG.warn("Хранитель {} прислал испорченный шард (хеш не сходится)", nodeId);
+                if (listener != null) {
+                    try { listener.onShardFailed(shardIndex, nodeId, "хеш не сходится"); }
+                    catch (Exception ignore) {}
+                }
                 continue;
             }
 
+            if (listener != null) {
+                try { listener.onShardFinished(shardIndex, nodeId, data.length); }
+                catch (Exception ignore) {}
+            }
             return data;
         }
         return null;

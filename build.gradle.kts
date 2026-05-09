@@ -44,10 +44,13 @@ javafx {
 }
 
 application {
-    // День 7: главная точка входа — наш CLI.
-    mainClass.set("ru.hse.jblockstorage.cli.Main")
+    // День 12: единая точка входа Launcher разводит запуск:
+    //   - без аргументов → JavaFX GUI;
+    //   - с аргументами   → CLI (как было).
+    // Это оставляет работающим `./gradlew run` (GUI), `./gradlew run --args="generate-keys ..."`
+    // (CLI) и `java -jar fat.jar generate-keys ...` (CLI) одновременно.
+    mainClass.set("ru.hse.jblockstorage.gui.Launcher")
     applicationDefaultJvmArgs = listOf(
-        // Удобный override уровня логирования через -Dru.hse.jblockstorage.logLevel=DEBUG
         "-Dfile.encoding=UTF-8"
     )
 }
@@ -65,13 +68,28 @@ tasks.test {
 }
 
 // ----------------------------------------------------------------------
+// Удобный shortcut: `./gradlew runCli --args="generate-keys --output=node.keys --password=pin"`
+// эквивалентен явному вызову CLI без необходимости пересобирать fat-jar.
+// ----------------------------------------------------------------------
+tasks.register<JavaExec>("runCli") {
+    group = "application"
+    description = "Запуск CLI напрямую (минуя GUI-Launcher)"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("ru.hse.jblockstorage.cli.Main")
+    standardInput = System.`in`
+}
+
+// ----------------------------------------------------------------------
 // Executable fat-JAR без shadow-плагина (зависимостей хватает) —
 // собирает все классы (свои + всех jar'ов из runtimeClasspath) в одну
 // директорию и пакует в jar с правильным манифестом.
 //
+// Главный класс — Launcher: с аргументами → CLI, без аргументов → GUI.
+//
 // Использование:
 //   ./gradlew fatJar
 //   java -jar build/libs/JBlockStorage-fat.jar generate-keys --output=node.keys --password=pin
+//   java -jar build/libs/JBlockStorage-fat.jar         # запуск GUI
 // ----------------------------------------------------------------------
 tasks.register<Jar>("fatJar") {
     archiveBaseName.set("JBlockStorage")
@@ -80,7 +98,7 @@ tasks.register<Jar>("fatJar") {
 
     manifest {
         attributes(
-            "Main-Class" to "ru.hse.jblockstorage.cli.Main",
+            "Main-Class" to "ru.hse.jblockstorage.gui.Launcher",
             "Implementation-Title" to "JBlockStorage",
             "Implementation-Version" to project.version
         )

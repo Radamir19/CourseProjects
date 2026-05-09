@@ -53,3 +53,10 @@ MANIFEST-*
 
 # --- JavaFX runtime (если когда-нибудь появятся локальные SDK) ---
 javafx-sdk*/
+
+# JBlockStorage runtime — приватные ключи и БД, никогда не коммитим
+.jblockstorage/
+.jblockstorage-*/
+
+.jblockstorage/
+.jblockstorage-*/

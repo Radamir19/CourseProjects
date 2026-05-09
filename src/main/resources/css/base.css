@@ -1,0 +1,1730 @@
+/* ====================================================================
+ * JBlockStorage · base.css
+ * ----------------------------------------------------------------
+ * Структурные стили GUI: типографика, формы, размеры, паддинги.
+ *
+ * Цвета сюда НЕ хардкодятся. Все цветовые значения берутся через
+ * looked-up colors с префиксом -color-* — они определены в
+ * light.css и dark.css. Это позволяет переключать тему за один шаг
+ * (поменяли активный цветовой лист — все компоненты перерисовались).
+ *
+ * Соответствие toкенов summary дня 12:
+ *   -color-bg-primary, -color-bg-secondary  → фоны
+ *   -color-card-bg, -color-card-border      → карточки
+ *   -color-text-primary/secondary/hint      → тексты
+ *   -color-accent, -color-accent-hover      → акцент (кнопки primary, ссылки)
+ *   -color-success/warning/danger           → статусы
+ *   -color-pdf-bg/fg, -color-doc-..., ...   → категории файлов
+ *   -color-shadow                           → тень карточек
+ * ==================================================================== */
+
+/* ---------- Корневой контейнер: шрифт и базовый фон --------------- */
+
+.root {
+    -fx-font-family: "Inter", "SF Pro Display", "SF Pro Text", "Segoe UI",
+                     "Helvetica Neue", "Arial", sans-serif;
+    -fx-font-size: 14px;
+    -fx-text-fill: -color-text-primary;
+    -fx-background-color: -color-bg-primary;
+}
+
+.app-background {
+    -fx-background-color: -color-bg-primary;
+}
+
+/* ---------- ScrollPane: убираем стандартный «банковский» бордер --- */
+
+.app-scroll,
+.app-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-background: transparent;
+    -fx-padding: 0;
+}
+
+.app-scroll {
+    -fx-border-color: transparent;
+}
+
+/* ---------- Типографика ------------------------------------------- */
+
+/*
+ * Заголовок H1 — 28px, вес 500. После итераций «надписи тусклые» этот
+ * размер был зафиксирован как минимум — меньше не делаем.
+ */
+.h1 {
+    -fx-font-size: 28px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.h2 {
+    -fx-font-size: 20px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.body {
+    -fx-font-size: 15px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.text-secondary {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.text-hint {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-hint;
+}
+
+/*
+ * UPPERCASE-лейблы секций сайдбара и форм. JavaFX не имеет
+ * text-transform, поэтому в коде надо отдавать уже в верхнем регистре.
+ */
+.label-section {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-hint;
+}
+
+.mono-hint {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas",
+                     "Courier New", monospace;
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-hint;
+}
+
+/* ---------- Brand logo (градиент бренда — одинаковый в обеих темах) */
+
+.brand-logo {
+    -fx-background-color: linear-gradient(to bottom right, #007aff, #5856d6);
+    -fx-background-radius: 12;
+    -fx-effect: dropshadow(gaussian, rgba(88, 86, 214, 0.25), 12, 0, 0, 4);
+}
+
+/* ---------- Кнопки ------------------------------------------------- */
+
+/* База для всех наших кнопок */
+.button {
+    -fx-cursor: hand;
+    -fx-font-size: 13px;
+    -fx-font-weight: 500;
+    -fx-padding: 8 16 8 16;
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
+    -fx-effect: null;
+}
+
+.button:disabled {
+    -fx-opacity: 0.45;
+    -fx-cursor: default;
+}
+
+/* Primary (Apple system blue) */
+.btn-primary {
+    -fx-background-color: -color-accent;
+    -fx-text-fill: white;
+    -fx-border-color: transparent;
+}
+
+.btn-primary:hover {
+    -fx-background-color: -color-accent-hover;
+}
+
+.btn-primary:armed {
+    -fx-background-color: -color-accent-pressed;
+}
+
+.btn-primary:focused {
+    -fx-effect: null;
+    /* JavaFX по умолчанию рисует синюю обводку у focused-кнопки.
+     * Не убираем её совсем — это полезный indicator для keyboard nav,
+     * но glow вокруг (предыдущая версия) был слишком кричащий. */
+}
+
+/* Secondary (плотная серая заливка) */
+.btn-secondary {
+    -fx-background-color: -color-button-secondary-bg;
+    -fx-text-fill: -color-text-primary;
+    -fx-border-color: -color-border;
+}
+
+.btn-secondary:hover {
+    -fx-background-color: -color-button-secondary-hover;
+}
+
+/* Ghost (только текст, без фона) */
+.btn-ghost {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-accent;
+    -fx-border-color: transparent;
+}
+
+.btn-ghost:hover {
+    -fx-background-color: -color-button-secondary-bg;
+}
+
+/* Danger (для действий «Удалить») */
+.btn-danger {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-danger;
+    -fx-border-color: -color-danger;
+}
+
+.btn-danger:hover {
+    -fx-background-color: -color-danger-bg-hover;
+}
+
+/* ---------- ComboBox (переключатель темы) ------------------------ */
+
+.theme-picker.combo-box {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
+    -fx-padding: 0;
+    -fx-text-fill: -color-text-primary;
+    -fx-pref-width: 140;
+}
+
+.theme-picker .list-cell {
+    -fx-text-fill: -color-text-primary;
+    -fx-background-color: transparent;
+    -fx-padding: 6 10 6 10;
+}
+
+.theme-picker .arrow-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0 8 0 0;
+}
+
+.theme-picker .arrow {
+    -fx-background-color: -color-text-secondary;
+}
+
+.theme-picker .combo-box-popup .list-view {
+    -fx-background-color: -color-card-bg;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+}
+
+.theme-picker .combo-box-popup .list-view .list-cell:filled:hover {
+    -fx-background-color: -color-button-secondary-hover;
+    -fx-text-fill: -color-text-primary;
+}
+
+.theme-picker .combo-box-popup .list-view .list-cell:filled:selected {
+    -fx-background-color: -color-accent;
+    -fx-text-fill: white;
+}
+
+/* ---------- Карточка ----------------------------------------------- */
+
+.card {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 12;
+    -fx-border-color: -color-card-border;
+    -fx-border-radius: 12;
+    -fx-border-width: 1;
+    -fx-effect: dropshadow(gaussian, -color-shadow, 16, 0, 0, 4);
+}
+
+/* ---------- Свотчи палитры ---------------------------------------- */
+
+.swatch {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-border-color: -color-border;
+    -fx-border-width: 1;
+}
+
+.swatch--color-bg-primary    { -fx-background-color: -color-bg-primary; }
+.swatch--color-bg-secondary  { -fx-background-color: -color-bg-secondary; }
+.swatch--color-card-bg       { -fx-background-color: -color-card-bg; }
+.swatch--color-border        { -fx-background-color: -color-border; }
+.swatch--color-text-primary  { -fx-background-color: -color-text-primary; }
+.swatch--color-text-secondary{ -fx-background-color: -color-text-secondary; }
+.swatch--color-text-hint     { -fx-background-color: -color-text-hint; }
+.swatch--color-accent        { -fx-background-color: -color-accent; }
+.swatch--color-success       { -fx-background-color: -color-success; }
+.swatch--color-warning       { -fx-background-color: -color-warning; }
+.swatch--color-danger        { -fx-background-color: -color-danger; }
+
+/* ---------- Бейджи категорий файлов (PDF/DOC/JPG/ZIP) -------------- */
+
+.file-badge {
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -fx-border-width: 1;
+}
+
+.file-badge--pdf { -fx-background-color: -color-pdf-bg; -fx-border-color: -color-pdf-border; }
+.file-badge--doc { -fx-background-color: -color-doc-bg; -fx-border-color: -color-doc-border; }
+.file-badge--img { -fx-background-color: -color-img-bg; -fx-border-color: -color-img-border; }
+.file-badge--zip { -fx-background-color: -color-zip-bg; -fx-border-color: -color-zip-border; }
+
+.file-badge-label {
+    -fx-font-size: 10px;
+    -fx-font-weight: 700;
+}
+
+.file-badge-label--pdf { -fx-text-fill: -color-pdf-fg; }
+.file-badge-label--doc { -fx-text-fill: -color-doc-fg; }
+.file-badge-label--img { -fx-text-fill: -color-img-fg; }
+.file-badge-label--zip { -fx-text-fill: -color-zip-fg; }
+
+/* ---------- Статус-точки (Сеть стабильна / Реплик 3/3) ------------- */
+
+.status-dot {
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+}
+
+.status-success { -fx-background-color: -color-success; }
+.status-warning { -fx-background-color: -color-warning; }
+.status-danger  { -fx-background-color: -color-danger; }
+
+/* ====================================================================
+ * Onboarding layout (день 12, шаг 2)
+ * ----------------------------------------------------------------
+ * Структура: HBox с фиксированным sidebar 240px слева и flex-контентом
+ * справа. Используется на всех экранах Onboarding (Welcome / Login /
+ * 3 шага CreateProfile).
+ * ==================================================================== */
+
+.onboarding-root {
+    -fx-background-color: -color-bg-primary;
+}
+
+.onboarding-content {
+    -fx-padding: 48 56 48 56;
+    -fx-background-color: -color-bg-primary;
+}
+
+/* ---------- Sidebar (240px, фиксированный) ------------------------ */
+
+.sidebar {
+    -fx-background-color: -color-bg-secondary;
+    -fx-pref-width: 240;
+    -fx-min-width: 240;
+    -fx-max-width: 240;
+    -fx-padding: 24 20 24 20;
+    -fx-spacing: 24;
+    /* Тонкая разделительная линия справа — улучшает визуальное расщепление */
+    -fx-border-color: transparent -color-border transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+
+.sidebar-brand {
+    /* HBox с логотипом и названием — без фона */
+}
+
+.sidebar-brand-name {
+    -fx-font-size: 14px;
+    -fx-font-weight: 600;
+    -fx-text-fill: -color-text-primary;
+}
+
+.sidebar-version {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas",
+                     "Courier New", monospace;
+    -fx-font-size: 10px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.sidebar-footer {
+    /* контейнер для футера — сам по себе без декораций */
+}
+
+/* ---------- Мини-схема архитектуры в sidebar ---------------------- */
+
+.architecture-section-label {
+    -fx-font-size: 10px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-hint;
+}
+
+.architecture-section-text {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* ---------- Welcome: большой логотип и подзаголовок --------------- */
+
+.brand-logo-large {
+    -fx-background-color: linear-gradient(to bottom right, #007aff, #5856d6);
+    -fx-background-radius: 16;
+    -fx-effect: dropshadow(gaussian, rgba(88, 86, 214, 0.30), 16, 0, 0, 6);
+}
+
+.welcome-subtitle {
+    -fx-font-size: 14px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* ---------- Onboarding-кнопки: крупнее обычных -------------------- */
+
+.btn-large {
+    -fx-padding: 12 24 12 24;
+    -fx-font-size: 14px;
+}
+
+/* ====================================================================
+ * Create-profile flow (день 12, шаг 3)
+ * ----------------------------------------------------------------
+ * Дополнительные стили для трёх шагов создания профиля:
+ *   - form-field, form-error            — общие формы Onboarding
+ *   - mnemonic-grid, mnemonic-num/word  — отображение seed-фразы
+ *   - warning-card                      — жёлтое предупреждение
+ *   - step-label, step-title            — индикатор шагов в sidebar
+ * ==================================================================== */
+
+/* ---------- Поля ввода (Mac-native стиль) ------------------------- */
+
+.text-field, .password-field {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
+    -fx-padding: 8 12 8 12;
+    -fx-text-fill: -color-text-primary;
+    -fx-prompt-text-fill: -color-text-hint;
+    -fx-font-size: 13px;
+}
+
+.text-field:focused, .password-field:focused {
+    -fx-border-color: -color-accent;
+    -fx-border-width: 1.5;
+    -fx-effect: null;
+}
+
+.text-field:disabled, .password-field:disabled {
+    -fx-opacity: 0.45;
+}
+
+/* ---------- Лейблы и ошибки полей формы --------------------------- */
+
+.form-field-label {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.form-error {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-danger;
+    -fx-padding: 4 0 0 0;
+}
+
+/* ---------- Жёлтый warning-card ----------------------------------- */
+
+.warning-card {
+    -fx-background-color: -color-warning-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-warning-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
+    -fx-padding: 12 16 12 16;
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+}
+
+/* ---------- Сетка мнемоники (12 слов 4×3) ------------------------- */
+
+.mnemonic-grid {
+    -fx-padding: 16 0 16 0;
+}
+
+.mnemonic-cell {
+    -fx-padding: 8 12 8 12;
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 6;
+    -fx-border-color: -color-border;
+    -fx-border-width: 1;
+    -fx-border-radius: 6;
+    -fx-min-width: 110;
+}
+
+.mnemonic-num {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas",
+                     "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.mnemonic-word {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas",
+                     "Courier New", monospace;
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+/* ---------- Индикатор шагов в sidebar ----------------------------- */
+
+.step-label {
+    -fx-font-size: 10px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-hint;
+}
+
+.step-label--active {
+    -fx-text-fill: -color-accent;
+}
+
+.step-title {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.step-title--active {
+    -fx-text-fill: -color-text-primary;
+    -fx-font-weight: 500;
+}
+
+/* ====================================================================
+ * Onboarding redesign по мокапам (день 12, шаг 5)
+ * ----------------------------------------------------------------
+ * Главное отличие от первой версии: sidebar и контент-фон теперь
+ * имеют ВЕРТИКАЛЬНЫЙ ГРАДИЕНТ (#f5f5f7 → #e8e8ed) с полупрозрачными
+ * карточками поверх. Это даёт характерный mac-native «живой» вид.
+ * ==================================================================== */
+
+/* ---------- Градиентный фон onboarding-экранов -------------------- */
+
+.onboarding-root {
+    -fx-background-color: linear-gradient(
+        to bottom,
+        -color-bg-primary 0%,
+        -color-bg-secondary 100%
+    );
+}
+
+.onboarding-content {
+    -fx-padding: 32 48 32 48;
+    -fx-background-color: transparent;
+}
+
+/* ---------- Sidebar: полупрозрачный белый поверх градиента -------- */
+
+.sidebar {
+    -fx-background-color: -color-sidebar-bg;
+    -fx-pref-width: 240;
+    -fx-min-width: 240;
+    -fx-max-width: 240;
+    -fx-padding: 24 20 24 20;
+    -fx-spacing: 24;
+    -fx-border-color: transparent -color-border transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+
+/* Блок «СЕТЬ» / «Соединение установлено» в sidebar */
+.sidebar-card {
+    -fx-background-color: -color-sidebar-card-bg;
+    -fx-background-radius: 7;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 7;
+    -fx-border-width: 0.5;
+    -fx-padding: 10 12 10 12;
+}
+
+/* ---------- Назад-ссылка как у Apple (← Назад синим) -------------- */
+
+.back-link {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-accent;
+    -fx-font-size: 13px;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+    -fx-border-color: transparent;
+}
+
+.back-link:hover {
+    -fx-text-fill: -color-accent-hover;
+    -fx-underline: true;
+}
+
+/* ---------- Numbered step indicator (1/2/3 + ✓) ------------------- */
+
+.step-row {
+    -fx-padding: 9 10 9 10;
+    -fx-background-radius: 6;
+    -fx-spacing: 10;
+}
+
+.step-row--active {
+    -fx-background-color: -color-accent-bg;
+}
+
+.step-circle {
+    -fx-min-width: 20;
+    -fx-min-height: 20;
+    -fx-pref-width: 20;
+    -fx-pref-height: 20;
+    -fx-max-width: 20;
+    -fx-max-height: 20;
+    -fx-background-radius: 10;
+    -fx-alignment: center;
+    -fx-font-size: 11px;
+    -fx-font-weight: 500;
+}
+
+.step-circle--pending {
+    -fx-background-color: -color-step-pending-bg;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.step-circle--active {
+    -fx-background-color: -color-accent;
+    -fx-text-fill: white;
+}
+
+.step-circle--done {
+    -fx-background-color: -color-success;
+    -fx-text-fill: white;
+}
+
+.step-row-title {
+    -fx-font-size: 13px;
+}
+
+.step-row-title--active {
+    -fx-text-fill: -color-text-primary;
+    -fx-font-weight: 500;
+}
+
+.step-row-title--inactive {
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* ---------- Список шагов: лейбл сверху ---------------------------- */
+
+.steps-section-label {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* ---------- Form-card: единая большая карточка с inner-полями ---- */
+
+.form-card {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-card-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 0.5;
+}
+
+.form-card-row {
+    -fx-padding: 11 14 11 14;
+    -fx-border-color: transparent transparent -color-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+.form-card-row--last {
+    -fx-border-width: 0;
+}
+
+.form-card-label {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* Inline-поля внутри form-card (без бордера и фона) */
+.text-field-inline, .password-field-inline {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+    -fx-text-fill: -color-text-primary;
+    -fx-prompt-text-fill: -color-text-hint;
+    -fx-font-size: 14px;
+}
+
+.text-field-inline:focused, .password-field-inline:focused {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
+/* ---------- Mnemonic 3×4: легкий фон, без рамок ------------------- */
+
+.mnemonic-grid-flat {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-card-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 0.5;
+    -fx-padding: 14;
+    -fx-hgap: 6;
+    -fx-vgap: 6;
+}
+
+.mnemonic-cell-flat {
+    -fx-background-color: -color-mnemonic-cell-bg;
+    -fx-background-radius: 5;
+    -fx-padding: 6 8 6 8;
+    -fx-spacing: 6;
+}
+
+.mnemonic-num-flat {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 10px;
+    -fx-text-fill: -color-text-hint;
+    -fx-min-width: 14;
+}
+
+.mnemonic-word-flat {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+/* ---------- Welcome: full-width buttons (340px) ------------------- */
+
+.btn-full {
+    -fx-padding: 11 16 11 16;
+    -fx-font-size: 14px;
+    -fx-min-width: 0;
+}
+
+/* ---------- Login: KEY-бейдж внутри карточки ---------------------- */
+
+.key-badge {
+    -fx-background-color: -color-accent;
+    -fx-background-radius: 4;
+    -fx-min-width: 30;
+    -fx-min-height: 34;
+    -fx-pref-width: 30;
+    -fx-pref-height: 34;
+    -fx-alignment: center;
+}
+
+.key-badge-label {
+    -fx-text-fill: white;
+    -fx-font-size: 9px;
+    -fx-font-weight: 500;
+}
+
+/* ---------- Footer onboarding sidebar ----------------------------- */
+
+.sidebar-footer-text {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+/* ====================================================================
+ * Main app: MainSidebar + Dashboard (день 13)
+ * ==================================================================== */
+
+/* MainSidebar — переиспользует .sidebar базовое оформление, плюс пункты */
+
+.nav-item {
+    -fx-padding: 8 11 8 11;
+    -fx-background-radius: 6;
+    -fx-spacing: 10;
+    -fx-cursor: hand;
+}
+
+.nav-item:hover {
+    -fx-background-color: -color-button-secondary-hover;
+}
+
+.nav-item--active {
+    -fx-background-color: -color-accent-bg;
+}
+
+.nav-item--active:hover {
+    -fx-background-color: -color-accent-bg;
+}
+
+.nav-item-label {
+    -fx-font-size: 14px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.nav-item-label--active {
+    -fx-text-fill: -color-accent;
+    -fx-font-weight: 500;
+}
+
+.nav-item-count {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.nav-item-count--active {
+    -fx-text-fill: -color-accent;
+    -fx-background-color: -color-accent-bg-strong;
+    -fx-background-radius: 9;
+    -fx-padding: 1 8 1 8;
+}
+
+/* Иконка пункта меню (SVG path) */
+.nav-item-icon {
+    -fx-fill: transparent;
+    -fx-stroke: -color-text-secondary;
+    -fx-stroke-width: 1.3;
+    -fx-stroke-line-cap: round;
+    -fx-stroke-line-join: round;
+}
+
+.nav-item-icon--active {
+    -fx-stroke: -color-accent;
+}
+
+/* Профиль в верхней части sidebar (имя + бренд) */
+.sidebar-profile-name {
+    -fx-font-size: 14px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.sidebar-profile-handle {
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* Карточка статуса сети внизу sidebar */
+.network-card {
+    -fx-background-color: -color-sidebar-card-bg;
+    -fx-background-radius: 7;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 7;
+    -fx-border-width: 0.5;
+    -fx-padding: 9 11 9 11;
+    -fx-spacing: 4;
+}
+
+.network-card-title {
+    -fx-font-size: 13px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.network-card-meta {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* Dashboard header (заголовок раздела + действия) */
+.section-header {
+    -fx-padding: 24 28 20 28;
+    -fx-border-color: transparent transparent -color-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+.section-title {
+    -fx-font-size: 28px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.section-subtitle {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* Empty state (центральная заглушка) */
+.empty-state-icon-bg {
+    -fx-background-color: -color-accent-bg;
+    -fx-background-radius: 14;
+}
+
+.empty-state-title {
+    -fx-font-size: 19px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.empty-state-text {
+    -fx-font-size: 14px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+/* ====================================================================
+ * Upload overlay (день 13 шаг 2)
+ * ----------------------------------------------------------------
+ * Модальный диалог поверх Dashboard. Реализуется через layering в
+ * корневом StackPane сцены (см. JBlockStorageApp.start) — тёмная
+ * полупрозрачная подложка перекрывает основной экран.
+ * ==================================================================== */
+
+.modal-scrim {
+    -fx-background-color: rgba(0, 0, 0, 0.55);
+}
+
+.modal-card {
+    -fx-background-color: -color-modal-bg;
+    -fx-background-radius: 12;
+    -fx-border-color: -color-modal-border;
+    -fx-border-radius: 12;
+    -fx-border-width: 0.5;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.40), 32, 0, 0, 12);
+}
+
+.modal-title {
+    -fx-font-size: 21px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.modal-subtitle {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.modal-section-divider {
+    -fx-background-color: -color-border;
+    -fx-pref-height: 0.5;
+    -fx-min-height: 0.5;
+    -fx-max-height: 0.5;
+}
+
+/* Drop-zone — синяя рамка, реагирует на drag-over.
+ * Примечание: JavaFX-CSS не поддерживает border-style: segments() / dashed
+ * для регионов, поэтому используем сплошную рамку. На функциональность
+ * не влияет, drop-target определяется по setOnDragOver. */
+.drop-zone {
+    -fx-background-color: -color-accent-bg-soft;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-accent;
+    -fx-border-radius: 10;
+    -fx-border-width: 1.5;
+    -fx-padding: 28 16 28 16;
+    -fx-spacing: 8;
+    -fx-alignment: center;
+}
+
+.drop-zone--hover {
+    -fx-background-color: -color-accent-bg;
+}
+
+.drop-zone-title {
+    -fx-font-size: 15px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.drop-zone-hint {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.drop-zone-link {
+    -fx-text-fill: -color-accent;
+    -fx-cursor: hand;
+}
+
+.drop-zone-link:hover {
+    -fx-underline: true;
+}
+
+/* Превью выбранного файла — горизонтальная карточка с бейджем категории */
+.file-preview {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-modal-inner-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 0.5;
+    -fx-padding: 11 14 11 14;
+    -fx-spacing: 12;
+    -fx-alignment: center-left;
+}
+
+/* Сводка «25 шардов × 3 реплики · AES-256-GCM» */
+.summary-card {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-modal-inner-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+    -fx-padding: 10 12 10 12;
+    -fx-spacing: 4;
+}
+
+.summary-row {
+    -fx-spacing: 0;
+    -fx-alignment: center-left;
+}
+
+.summary-row-label {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.summary-row-value {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+/* Информационная плашка (синяя «i») в add-contact-стиле,
+ * используем для предупреждения «Недостаточно пиров» */
+.info-banner {
+    -fx-background-color: -color-accent-bg-soft;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-accent-border-soft;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+    -fx-padding: 10 12 10 12;
+    -fx-spacing: 9;
+    -fx-alignment: top-left;
+}
+
+.info-banner--warn {
+    -fx-background-color: -color-warning-bg;
+    -fx-border-color: -color-warning-border;
+}
+
+.info-banner-text {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+}
+
+/* Полоса прогресса (инфинитная) */
+.upload-progress-bar {
+    -fx-pref-height: 4;
+    -fx-padding: 0;
+}
+
+.upload-progress-bar > .track {
+    -fx-background-color: -color-accent-bg-strong;
+    -fx-background-radius: 2;
+}
+
+.upload-progress-bar > .bar {
+    -fx-background-color: -color-accent;
+    -fx-background-radius: 2;
+    -fx-padding: 0;
+}
+
+
+/* ====================================================================
+ * Files table (день 13 — раздел «Мои файлы» / «Расшаренные мне»)
+ * ----------------------------------------------------------------
+ * Список без javafx.TableView: каждая строка — HBox с фиксированными
+ * ширинами колонок. Это даёт точно такой же вид, как в мокапе
+ * dashboard_my_files_v3, и убирает кучу неуправляемых стилей TableView.
+ * ==================================================================== */
+
+/* ---------- Toolbar row (поиск + сортировка) ---------------------- */
+
+.files-toolbar {
+    -fx-padding: 12 28 12 28;
+    -fx-spacing: 8;
+    -fx-alignment: center-left;
+    -fx-border-color: transparent transparent -color-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+.files-toolbar-search {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 6;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 6;
+    -fx-border-width: 0.5;
+    -fx-padding: 5 10 5 10;
+    -fx-text-fill: -color-text-primary;
+    -fx-prompt-text-fill: -color-text-hint;
+    -fx-font-size: 12px;
+}
+
+.files-toolbar-search:focused {
+    -fx-border-color: -color-accent;
+    -fx-border-width: 1;
+}
+
+.files-toolbar-sort {
+    -fx-background-color: -color-card-bg;
+    -fx-text-fill: -color-text-primary;
+    -fx-border-color: -color-border;
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -fx-border-width: 0.5;
+    -fx-padding: 5 10 5 10;
+    -fx-font-size: 12px;
+    -fx-cursor: hand;
+}
+
+.files-toolbar-sort:hover {
+    -fx-background-color: -color-button-secondary-hover;
+}
+
+/* ---------- Header row (UPPERCASE: Имя | Размер | Реплик) --------- */
+
+.files-list-header {
+    -fx-padding: 8 28 8 28;
+    -fx-spacing: 0;
+}
+
+.files-list-col-label {
+    -fx-font-size: 10px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-hint;
+}
+
+/* ---------- Data row ---------------------------------------------- */
+
+.files-row {
+    -fx-padding: 9 28 9 28;
+    -fx-alignment: center-left;
+    -fx-border-color: -color-border transparent transparent transparent;
+    -fx-border-width: 0.5 0 0 0;
+    -fx-cursor: default;
+}
+
+.files-row:hover {
+    -fx-background-color: -color-button-secondary-bg;
+}
+
+.files-row-name {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.files-row-meta {
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.files-row-size {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.files-row-replicas {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.files-row-action-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-text-secondary;
+    -fx-font-size: 16px;
+    -fx-padding: 0 8 4 8;
+    -fx-cursor: hand;
+    -fx-border-color: transparent;
+    -fx-min-width: 28;
+}
+
+.files-row-action-btn:hover {
+    -fx-background-color: -color-button-secondary-hover;
+    -fx-background-radius: 4;
+}
+
+/* Кнопка «Скачать» в строке Расшаренные мне */
+.files-row-download-btn {
+    -fx-background-color: -color-card-bg;
+    -fx-text-fill: -color-text-primary;
+    -fx-border-color: -color-border;
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -fx-border-width: 0.5;
+    -fx-padding: 4 10 4 10;
+    -fx-font-size: 11px;
+    -fx-cursor: hand;
+}
+
+.files-row-download-btn:hover {
+    -fx-background-color: -color-button-secondary-hover;
+}
+
+/* ---------- Контекстное меню --------------------------------------- */
+
+.context-menu {
+    -fx-background-color: -color-modal-bg;
+    -fx-background-radius: 7;
+    -fx-border-color: -color-border;
+    -fx-border-radius: 7;
+    -fx-border-width: 0.5;
+    -fx-padding: 4 0 4 0;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.18), 14, 0, 0, 4);
+}
+
+.context-menu .menu-item {
+    -fx-padding: 6 14 6 14;
+    -fx-background-color: transparent;
+}
+
+.context-menu .menu-item .label {
+    -fx-text-fill: -color-text-primary;
+    -fx-font-size: 13px;
+}
+
+.context-menu .menu-item:focused {
+    -fx-background-color: -color-accent;
+}
+
+.context-menu .menu-item:focused .label {
+    -fx-text-fill: white;
+}
+
+.context-menu .menu-item.danger .label {
+    -fx-text-fill: -color-danger;
+}
+
+.context-menu .menu-item.danger:focused {
+    -fx-background-color: -color-danger;
+}
+
+.context-menu .menu-item.danger:focused .label {
+    -fx-text-fill: white;
+}
+
+.context-menu .separator-menu-item {
+    -fx-padding: 2 0 2 0;
+}
+
+.context-menu .separator-menu-item:disabled .line {
+    -fx-border-color: -color-border;
+    -fx-border-width: 0.5 0 0 0;
+}
+
+/* ====================================================================
+ * Свойства файла (FilePropertiesDialog) — день 13 шаг 4
+ * ==================================================================== */
+
+.props-section-label {
+    -fx-font-size: 11px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-hint;
+    -fx-padding: 2 0 6 0;
+}
+
+.props-card {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-modal-inner-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+}
+
+.props-row {
+    -fx-padding: 9 12 9 12;
+    -fx-spacing: 12;
+    -fx-alignment: center-left;
+    -fx-border-color: transparent transparent -color-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+.props-row--last { -fx-border-width: 0; }
+
+.props-row-label {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+    -fx-min-width: 130;
+}
+
+.props-row-value {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.props-row-value-mono {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.props-storer-row {
+    -fx-padding: 8 12 8 12;
+    -fx-spacing: 10;
+    -fx-alignment: center-left;
+    -fx-border-color: transparent transparent -color-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+.props-storer-name {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.props-storer-key {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 10px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.btn-copy {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-accent;
+    -fx-border-color: transparent;
+    -fx-padding: 0 8 0 8;
+    -fx-cursor: hand;
+    -fx-font-size: 12px;
+}
+
+.btn-copy:hover {
+    -fx-underline: true;
+}
+
+/* ====================================================================
+ * Аватары контактов (используются в FilesTable, ShareFileDialog,
+ * ContactsContentView, FilePropertiesDialog для имени хранителя)
+ * ==================================================================== */
+
+.contact-avatar {
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-alignment: center;
+}
+
+.contact-avatar-label {
+    -fx-font-size: 13px;
+    -fx-font-weight: 500;
+}
+
+/* По хешу имени даём один из 5 цветов. Имена классов короткие — назначаются
+   в Java через программный switch на (hash % 5). */
+
+.contact-avatar--blue   { -fx-background-color: rgba(0,122,255,0.15); }
+.contact-avatar--orange { -fx-background-color: rgba(255,149,0,0.18); }
+.contact-avatar--purple { -fx-background-color: rgba(88,86,214,0.18); }
+.contact-avatar--green  { -fx-background-color: rgba(52,199,89,0.18); }
+.contact-avatar--pink   { -fx-background-color: rgba(255,45,85,0.15); }
+
+.contact-avatar-label--blue   { -fx-text-fill: #0a4d99; }
+.contact-avatar-label--orange { -fx-text-fill: #b8650a; }
+.contact-avatar-label--purple { -fx-text-fill: #4338a8; }
+.contact-avatar-label--green  { -fx-text-fill: #1c7d3e; }
+.contact-avatar-label--pink   { -fx-text-fill: #a01540; }
+
+/* Тёмная тема — те же подложки, но текст светлее */
+.theme-dark .contact-avatar-label--blue   { -fx-text-fill: #5cadff; }
+.theme-dark .contact-avatar-label--orange { -fx-text-fill: #ff9f0a; }
+.theme-dark .contact-avatar-label--purple { -fx-text-fill: #b6b3ff; }
+.theme-dark .contact-avatar-label--green  { -fx-text-fill: #6be38e; }
+.theme-dark .contact-avatar-label--pink   { -fx-text-fill: #ff6f8a; }
+
+/* ====================================================================
+ * Empty state кнопка-ссылка (без рамки) — используется в SharedFiles
+ * ==================================================================== */
+
+.muted-link {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-text-secondary;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+    -fx-font-size: 13px;
+}
+
+.muted-link:hover {
+    -fx-text-fill: -color-accent;
+    -fx-underline: true;
+}
+
+/* ====================================================================
+ * Share dialog — список контактов с чекбоксами (день 13 шаг 5)
+ * ==================================================================== */
+
+.share-contact-row {
+    -fx-padding: 8 12 8 12;
+    -fx-spacing: 10;
+    -fx-alignment: center-left;
+    -fx-cursor: hand;
+    -fx-background-radius: 6;
+}
+
+.share-contact-row:hover {
+    -fx-background-color: -color-button-secondary-bg;
+}
+
+.share-contact-row--selected {
+    -fx-background-color: -color-accent-bg-soft;
+}
+
+.share-contact-name {
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-text-primary;
+}
+
+.share-contact-key {
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+/* Поле «Публичный ключ получателя» вручную (когда контактов нет).
+ * Делаем явную рамку и контрастный фон, чтобы пользователь сразу
+ * видел, куда вставлять — без этого textarea сливается с окном. */
+.share-paste-area {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+    -fx-prompt-text-fill: -color-text-hint;
+    -fx-border-color: -color-accent-border-soft;
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
+}
+
+/* Внутренний viewport TextArea — здесь реально живёт фон и текст. */
+.share-paste-area .content {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 7;
+    -fx-padding: 10 12 10 12;
+}
+
+.share-paste-area .scroll-pane {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+}
+
+.share-paste-area .scroll-pane .viewport {
+    -fx-background-color: transparent;
+}
+
+.share-paste-area:focused {
+    -fx-border-color: -color-accent;
+    -fx-border-width: 1.5;
+}
+
+
+/* ====================================================================
+ * Sidebar upload card (день 13 — встроенный прогресс по мокапу
+ *   upload_progress.html: компактный блок над «Сеть стабильна»)
+ * ==================================================================== */
+
+.sidebar-upload-card {
+    -fx-background-color: -color-accent-bg-soft;
+    -fx-background-radius: 7;
+    -fx-border-color: -color-accent-border-soft;
+    -fx-border-radius: 7;
+    -fx-border-width: 0.5;
+    -fx-padding: 9 11 9 11;
+}
+
+.sidebar-upload-title {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.sidebar-upload-percent {
+    -fx-font-size: 12px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-accent;
+}
+
+.sidebar-upload-filename {
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-primary;
+    /* Однострочное имя — длинные имена обрезаются автоматически: */
+}
+
+.sidebar-upload-progress-track {
+    -fx-background-color: -color-accent-bg-strong;
+    -fx-background-radius: 2;
+    -fx-min-height: 3;
+    -fx-pref-height: 3;
+    -fx-max-height: 3;
+}
+
+.sidebar-upload-progress-fill {
+    -fx-background-color: -color-accent;
+    -fx-background-radius: 2;
+}
+
+.sidebar-upload-progress-fill--success {
+    -fx-background-color: -color-success;
+}
+
+.sidebar-upload-progress-fill--danger {
+    -fx-background-color: -color-danger;
+}
+
+/* ====================================================================
+ * MyFiles upload card — большая карточка наверху раздела «Мои файлы»
+ * по мокапу upload_progress.html (правая часть).
+ * ==================================================================== */
+
+.upload-card {
+    -fx-background-color: -color-card-bg;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-card-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 0.5;
+    -fx-effect: dropshadow(gaussian, -color-shadow, 12, 0, 0, 3);
+}
+
+.upload-card-filename {
+    -fx-font-size: 13px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-text-primary;
+}
+
+.upload-card-meta {
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.upload-card-percent {
+    -fx-font-size: 16px;
+    -fx-font-weight: 500;
+    -fx-text-fill: -color-accent;
+}
+
+.upload-card-percent--danger {
+    -fx-text-fill: -color-danger;
+}
+
+.upload-card-eta {
+    -fx-font-size: 11px;
+    -fx-text-fill: -color-text-hint;
+}
+
+.upload-card-progress-track {
+    -fx-background-color: -color-accent-bg-strong;
+    -fx-background-radius: 2;
+    -fx-min-height: 4;
+    -fx-pref-height: 4;
+    -fx-max-height: 4;
+}
+
+.upload-card-progress-fill {
+    -fx-background-color: -color-accent;
+    -fx-background-radius: 2;
+}
+
+.upload-card-progress-fill--success {
+    -fx-background-color: -color-success;
+}
+
+.upload-card-progress-fill--danger {
+    -fx-background-color: -color-danger;
+}
+
+/* ----- Чекпоинты этапов (5 штук, с цветной точкой) ----------------- */
+
+.upload-checkpoint-dot {
+    -fx-background-radius: 999;
+    -fx-min-width: 6;
+    -fx-min-height: 6;
+    -fx-pref-width: 6;
+    -fx-pref-height: 6;
+    -fx-max-width: 6;
+    -fx-max-height: 6;
+}
+
+.upload-checkpoint-dot--pending { -fx-background-color: -color-step-pending-bg; }
+.upload-checkpoint-dot--active  { -fx-background-color: -color-accent; }
+.upload-checkpoint-dot--done    { -fx-background-color: -color-success; }
+.upload-checkpoint-dot--failed  { -fx-background-color: -color-danger; }
+
+.upload-checkpoint-text {
+    -fx-font-size: 11px;
+}
+
+.upload-checkpoint-text--pending { -fx-text-fill: -color-text-hint; }
+.upload-checkpoint-text--active  { -fx-text-fill: -color-text-primary; }
+.upload-checkpoint-text--done    { -fx-text-fill: -color-text-primary; }
+.upload-checkpoint-text--failed  { -fx-text-fill: -color-danger; }
+
+/* ====================================================================
+ * Modal ScrollPane (день 13 — UploadDialog с длинным контентом)
+ *
+ * ScrollPane внутри модалки: прозрачный фон, без видимой рамки.
+ * Полоса прокрутки тонкая, появляется только когда нужно (AS_NEEDED).
+ * ==================================================================== */
+
+.modal-scroll,
+.modal-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.modal-scroll {
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-border-width: 0;
+}
+
+/* Тонкая полоса прокрутки в стиле macOS */
+.modal-scroll > .scroll-bar:vertical {
+    -fx-pref-width: 8;
+    -fx-background-color: transparent;
+}
+
+.modal-scroll > .scroll-bar:vertical .thumb {
+    -fx-background-color: -color-text-hint;
+    -fx-background-radius: 4;
+    -fx-background-insets: 1;
+    -fx-opacity: 0.5;
+}
+
+.modal-scroll > .scroll-bar:vertical .thumb:hover {
+    -fx-opacity: 0.8;
+}
+
+.modal-scroll > .scroll-bar:vertical .track,
+.modal-scroll > .scroll-bar:vertical .track-background,
+.modal-scroll > .scroll-bar:vertical .increment-button,
+.modal-scroll > .scroll-bar:vertical .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.modal-scroll > .scroll-bar:vertical .increment-arrow,
+.modal-scroll > .scroll-bar:vertical .decrement-arrow {
+    -fx-shape: " ";
+    -fx-padding: 0;
+}
+
+/* ====================================================================
+ * UploadDialog — полировка под мокап upload_dialog.html (день 13)
+ * ==================================================================== */
+
+/* ---------- Drop-zone: пунктирная синяя рамка ---------- */
+.drop-zone {
+    -fx-background-color: -color-accent-bg-soft;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-accent;
+    -fx-border-radius: 10;
+    -fx-border-width: 1.5;
+    -fx-border-style: segments(6, 4, 6, 4) line-cap round;
+    -fx-padding: 28 20 28 20;
+    -fx-cursor: hand;
+}
+
+.drop-zone--hover {
+    -fx-background-color: -color-accent-bg-strong;
+    -fx-border-style: solid;
+}
+
+/* Hyperlink внутри drop-zone: убираем подчёркивание и focus-кольцо. */
+.drop-zone-link {
+    -fx-text-fill: -color-accent;
+    -fx-font-weight: 500;
+    -fx-padding: 0 0 0 4;
+    -fx-underline: false;
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+    -fx-background-color: transparent;
+    -fx-cursor: hand;
+}
+
+.drop-zone-link:hover {
+    -fx-text-fill: -color-accent-hover;
+    -fx-underline: true;   /* hover-only подчёркивание, как в мокапе */
+}
+
+.drop-zone-link:focused {
+    -fx-border-color: transparent;   /* гасим пунктир-кольцо */
+}
+
+/* ---------- Кнопки в модалке: disabled-стиль ---------- */
+
+/* Primary в задизейбленном состоянии — серый, не приглушённо-синий */
+.btn-primary:disabled {
+    -fx-background-color: -color-button-secondary-bg;
+    -fx-text-fill: -color-text-hint;
+    -fx-opacity: 1.0;   /* отключаем дефолтный JavaFX :disabled = opacity 0.4 */
+}
+
+/* Secondary в покое — без бордера, как в мокапе */
+.btn-secondary {
+    -fx-background-color: transparent;
+    -fx-border-color: -color-border;
+    -fx-border-width: 0.5;
+}
+
+.btn-secondary:hover {
+    -fx-background-color: -color-button-secondary-hover;
+}
+
+/* ---------- Сводка с разделителями строк ---------- */
+
+.summary-card {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-modal-inner-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+    -fx-padding: 4 14 4 14;
+}
+
+.summary-row {
+    -fx-padding: 9 0 9 0;
+    -fx-border-color: transparent transparent -color-modal-inner-border transparent;
+    -fx-border-width: 0 0 0.5 0;
+}
+
+/* Последняя строка — без нижней границы */
+.summary-card > .summary-row:last-child {
+    -fx-border-width: 0;
+}
+
+.summary-row-label {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.summary-row-value {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+    -fx-font-weight: 500;
+}
+
+/* ---------- Превью выбранного файла ---------- */
+
+.file-preview {
+    -fx-background-color: -color-modal-inner-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-modal-inner-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+    -fx-padding: 10 12 10 12;
+    -fx-spacing: 12;
+    -fx-alignment: CENTER_LEFT;
+}
+
+/* ---------- Modal-card: цельный фон, скруглённые углы ---------- */
+
+.modal-card {
+    -fx-background-color: -color-modal-bg;
+    -fx-background-radius: 10;
+    -fx-border-color: -color-modal-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 0.5;
+}
+
+.modal-title {
+    -fx-font-size: 18px;
+    -fx-font-weight: 600;
+    -fx-text-fill: -color-text-primary;
+}
+
+.modal-subtitle {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-secondary;
+}
+
+.modal-section-divider {
+    -fx-background-color: -color-modal-inner-border;
+    -fx-min-height: 0.5;
+    -fx-pref-height: 0.5;
+    -fx-max-height: 0.5;
+}
+
+/* ---------- Info-banner ---------- */
+
+.info-banner {
+    -fx-background-color: -color-warning-bg;
+    -fx-background-radius: 8;
+    -fx-border-color: -color-warning-border;
+    -fx-border-radius: 8;
+    -fx-border-width: 0.5;
+    -fx-padding: 10 12 10 12;
+}
+
+.info-banner-text {
+    -fx-font-size: 12px;
+    -fx-text-fill: -color-text-primary;
+    -fx-line-spacing: 2;
+}

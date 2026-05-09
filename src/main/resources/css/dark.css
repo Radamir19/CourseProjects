@@ -1,0 +1,78 @@
+/* ====================================================================
+ * JBlockStorage · dark.css
+ * ----------------------------------------------------------------
+ * Цветовые токены тёмной темы. Те же имена, что в light.css.
+ * Цвета — Apple dark-system colors. Акцент чуть ярче (#0a84ff vs
+ * #007aff) — Apple так делает в dark mode для лучшей читаемости.
+ * ==================================================================== */
+
+.root {
+    /* Базовые фоны */
+    -color-bg-primary:   #1c1c1e;
+    -color-bg-secondary: #2c2c2e;
+
+    /* Карточки — чуть прозрачные поверх тёмного фона, как в macOS */
+    -color-card-bg:     rgba(255, 255, 255, 0.05);
+    -color-card-border: rgba(255, 255, 255, 0.08);
+    -color-border:      rgba(255, 255, 255, 0.12);
+
+    /* Тени — почти невидимые на тёмном; чуть «глубже» через альфу */
+    -color-shadow: rgba(0, 0, 0, 0.45);
+
+    /* Текст */
+    -color-text-primary:   #f5f5f7;
+    -color-text-secondary: #aeaeb2;
+    -color-text-hint:      #8e8e93;
+
+    /* Акцент (Apple dark-mode blue) */
+    -color-accent:         #0a84ff;
+    -color-accent-hover:   #1f95ff;
+    -color-accent-pressed: #0668cc;
+
+    /* Кнопки */
+    -color-button-secondary-bg:    rgba(255, 255, 255, 0.06);
+    -color-button-secondary-hover: rgba(255, 255, 255, 0.10);
+
+    /* Статусы (dark-mode варианты Apple) */
+    -color-success: #30d158;
+    -color-warning: #ff9f0a;
+    -color-danger:  #ff453a;
+    -color-danger-bg-hover: rgba(255, 69, 58, 0.14);
+
+    /* Жёлтые предупреждения (warning-card) */
+    -color-warning-bg:     rgba(255, 159, 10, 0.14);
+    -color-warning-border: rgba(255, 159, 10, 0.40);
+
+    /* Onboarding redesign: полупрозрачные слои поверх градиента */
+    -color-sidebar-bg:        rgba(0, 0, 0, 0.20);
+    -color-sidebar-card-bg:   rgba(255, 255, 255, 0.06);
+    -color-accent-bg:         rgba(10, 132, 255, 0.18);
+    -color-accent-bg-strong:  rgba(10, 132, 255, 0.25);
+    -color-accent-bg-soft:    rgba(10, 132, 255, 0.08);
+    -color-accent-border-soft: rgba(10, 132, 255, 0.30);
+    -color-mnemonic-cell-bg:  rgba(255, 255, 255, 0.04);
+    -color-step-pending-bg:   rgba(255, 255, 255, 0.08);
+
+    /* Модальные диалоги — сплошной фон поверх scrim, не прозрачный */
+    -color-modal-bg:     #2c2c2e;
+    -color-modal-border: rgba(255, 255, 255, 0.18);
+    -color-modal-inner-bg:     #3a3a3c;
+    -color-modal-inner-border: rgba(255, 255, 255, 0.12);
+
+    /* Категории файлов — светлее, чтобы читаться на тёмном */
+    -color-pdf-bg:     rgba(255, 159, 10, 0.18);
+    -color-pdf-border: rgba(255, 159, 10, 0.40);
+    -color-pdf-fg:     #ff9f0a;
+
+    -color-doc-bg:     rgba(10, 132, 255, 0.18);
+    -color-doc-border: rgba(10, 132, 255, 0.40);
+    -color-doc-fg:     #5cadff;
+
+    -color-img-bg:     rgba(48, 209, 88, 0.16);
+    -color-img-border: rgba(48, 209, 88, 0.36);
+    -color-img-fg:     #6be38e;
+
+    -color-zip-bg:     rgba(174, 174, 178, 0.18);
+    -color-zip-border: rgba(174, 174, 178, 0.36);
+    -color-zip-fg:     #d6d6dc;
+}
