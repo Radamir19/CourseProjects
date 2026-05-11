@@ -61,6 +61,12 @@ public final class KeyManager {
 
     private static final SecureRandom RNG = new SecureRandom();
 
+    static {
+        // ТЗ 4.5.3: генерация RSA-ключей и шифрование приватного ключа
+        // (PBKDF2 + AES-GCM) выполняются через Bouncy Castle.
+        CryptoProviders.register();
+    }
+
     private KeyManager() {
         // утилитный класс
     }
@@ -92,7 +98,7 @@ public final class KeyManager {
     /** Генерирует свежую пару RSA-2048 для нового профиля пользователя. */
     public static KeyPair generateRsaKeyPair() {
         try {
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance(KEY_ALGORITHM);
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(KEY_ALGORITHM, CryptoProviders.BC);
             kpg.initialize(RSA_KEY_BITS, RNG);
             return kpg.generateKeyPair();
         } catch (GeneralSecurityException e) {
@@ -111,7 +117,7 @@ public final class KeyManager {
     public static PublicKey publicKeyFromBase64(String base64) {
         try {
             byte[] bytes = Base64.getDecoder().decode(base64);
-            return KeyFactory.getInstance(KEY_ALGORITHM)
+            return KeyFactory.getInstance(KEY_ALGORITHM, CryptoProviders.BC)
                     .generatePublic(new X509EncodedKeySpec(bytes));
         } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IllegalArgumentException("Некорректный публичный ключ", e);
@@ -141,7 +147,7 @@ public final class KeyManager {
 
             SecretKey aesKey = deriveKey(password, salt);
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding", CryptoProviders.BC);
             cipher.init(Cipher.ENCRYPT_MODE, aesKey, new GCMParameterSpec(TAG_BITS, iv));
             byte[] ciphertext = cipher.doFinal(key.getEncoded());
 
@@ -173,10 +179,10 @@ public final class KeyManager {
 
         try {
             SecretKey aesKey = deriveKey(password, salt);
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding", CryptoProviders.BC);
             cipher.init(Cipher.DECRYPT_MODE, aesKey, new GCMParameterSpec(TAG_BITS, iv));
             byte[] pkcs8 = cipher.doFinal(ciphertext);
-            return KeyFactory.getInstance(KEY_ALGORITHM)
+            return KeyFactory.getInstance(KEY_ALGORITHM, CryptoProviders.BC)
                     .generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
         } catch (GeneralSecurityException e) {
             throw new IOException("Не удалось расшифровать ключ — возможно, неверный пароль", e);
@@ -185,7 +191,7 @@ public final class KeyManager {
 
     private static SecretKey deriveKey(char[] password, byte[] salt) throws GeneralSecurityException {
         PBEKeySpec spec = new PBEKeySpec(password, salt, PBKDF2_ITERATIONS, PBKDF2_KEY_BITS);
-        SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256", CryptoProviders.BC);
         byte[] keyBytes = skf.generateSecret(spec).getEncoded();
         return new SecretKeySpec(keyBytes, "AES");
     }

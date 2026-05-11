@@ -42,6 +42,11 @@ public final class RsaOaep {
      *  блочный режим не используется (RSA шифрует одно сообщение, не поток). */
     private static final String TRANSFORMATION = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
 
+    static {
+        // ТЗ 4.5.3: используем Bouncy Castle для RSA-OAEP.
+        CryptoProviders.register();
+    }
+
     private RsaOaep() {}
 
     /**
@@ -51,7 +56,7 @@ public final class RsaOaep {
      */
     public static byte[] encrypt(byte[] plaintext, PublicKey publicKey) {
         try {
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION, CryptoProviders.BC);
             cipher.init(Cipher.ENCRYPT_MODE, publicKey, oaepSpec());
             return cipher.doFinal(plaintext);
         } catch (GeneralSecurityException e) {
@@ -65,7 +70,7 @@ public final class RsaOaep {
      */
     public static byte[] decrypt(byte[] ciphertext, PrivateKey privateKey) {
         try {
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION, CryptoProviders.BC);
             cipher.init(Cipher.DECRYPT_MODE, privateKey, oaepSpec());
             return cipher.doFinal(ciphertext);
         } catch (GeneralSecurityException e) {

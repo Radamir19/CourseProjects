@@ -73,6 +73,17 @@ public final class FileUploader {
     /** Фактор репликации по умолчанию (ТЗ п. 4.1.1.2.5: K ≥ 3). */
     public static final int DEFAULT_REPLICATION_FACTOR = 3;
 
+    /**
+     * Максимальный размер исходного файла, разрешённый текущей версией
+     * протокола (ТЗ п. 4.1.2, Таблица 1: «Размер до 5 ГБ»).
+     * Ограничение носит защитный характер: при использовании
+     * {@link Files#readAllBytes} файл целиком загружается в heap, и без
+     * лимита запрос на 100 ГБ-файл моментально завалит JVM по {@code OOM}.
+     * Также защищает сеть от случайной отправки гигантских файлов до
+     * того, как их шардинг завершится локально.
+     */
+    public static final long MAX_FILE_SIZE_BYTES = 5L * 1024 * 1024 * 1024;
+
     private final PublicKey ownerPublicKey;
     private final PrivateKey ownerPrivateKey;
     private final String ownerPublicKeyBase64;
@@ -145,6 +156,20 @@ public final class FileUploader {
 
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(availableStorers, "availableStorers");
+
+        // ТЗ 4.1.2: размер файла не более 5 ГБ. Проверяем ДО readAllBytes,
+        // иначе огромный файл выжрет heap и упадёт OOM до первой пользы.
+        long sizeOnDisk;
+        try {
+            sizeOnDisk = Files.size(file);
+        } catch (IOException e) {
+            throw new IOException("Не удалось определить размер файла: " + file, e);
+        }
+        if (sizeOnDisk > MAX_FILE_SIZE_BYTES) {
+            throw new IllegalArgumentException(
+                    "Файл превышает максимально допустимый размер 5 ГБ "
+                            + "(ТЗ 4.1.2): " + sizeOnDisk + " байт");
+        }
 
         // Если у нас есть локальное хранилище шардов, мы тоже можем быть
         // хранителем — добавляем self в начало списка. Это позволяет

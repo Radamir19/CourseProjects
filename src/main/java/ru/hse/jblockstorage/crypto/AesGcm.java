@@ -34,6 +34,11 @@ public final class AesGcm {
     private static final SecureRandom RNG = new SecureRandom();
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
 
+    static {
+        // ТЗ 4.5.3: гарантируем, что используется Bouncy Castle, а не SunJCE.
+        CryptoProviders.register();
+    }
+
     private AesGcm() {
         // утилитный класс
     }
@@ -41,7 +46,7 @@ public final class AesGcm {
     /** Генерирует случайный 256-битный ключ AES. */
     public static SecretKey generateKey() {
         try {
-            KeyGenerator kg = KeyGenerator.getInstance("AES");
+            KeyGenerator kg = KeyGenerator.getInstance("AES", CryptoProviders.BC);
             kg.init(KEY_BITS, RNG);
             return kg.generateKey();
         } catch (GeneralSecurityException e) {
@@ -72,7 +77,7 @@ public final class AesGcm {
             byte[] iv = new byte[IV_BYTES];
             RNG.nextBytes(iv);
 
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION, CryptoProviders.BC);
             cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
             byte[] ct = cipher.doFinal(plaintext);
 
@@ -99,7 +104,7 @@ public final class AesGcm {
             System.arraycopy(data, 0, iv, 0, IV_BYTES);
             System.arraycopy(data, IV_BYTES, ct, 0, ct.length);
 
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION, CryptoProviders.BC);
             cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
             return cipher.doFinal(ct);
         } catch (GeneralSecurityException e) {

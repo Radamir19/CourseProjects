@@ -14,6 +14,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.hse.jblockstorage.crypto.Bip39;
 import ru.hse.jblockstorage.crypto.KeyManager;
 import ru.hse.jblockstorage.gui.AppContext;
 import ru.hse.jblockstorage.gui.components.OnboardingSidebar;
@@ -189,18 +190,29 @@ public final class CreateProfileStep3View {
                 String safeName = sanitize(state.profileName());
                 Path keystorePath = profilesDir.resolve(safeName + ".keys");
                 Path pubKeyPath = profilesDir.resolve(safeName + ".pub");
+                Path recoveryPath = profilesDir.resolve(safeName + ".recovery");
 
                 if (Files.exists(keystorePath)) {
                     throw new IOException("Файл keystore уже существует: " + keystorePath);
                 }
 
                 char[] password = state.password();
+                char[] recoveryPwd = Bip39.mnemonicToKeystorePassword(state.mnemonic());
                 try {
                     KeyManager.saveEncryptedPrivateKey(
                             state.keyPair().getPrivate(), keystorePath, password);
                     KeyManager.savePublicKey(state.keyPair().getPublic(), pubKeyPath);
+
+                    // ТЗ 4.1.5.1: дополнительно сохраняем «recovery»-копию приватного
+                    // ключа, зашифрованную паролем, выведенным детерминированно из
+                    // BIP-39 фразы. Если пользователь забудет основной пароль, он
+                    // вводит фразу — мы расшифровываем .recovery, выводим тот же
+                    // приватный ключ и сохраняем новый .keys с новым паролем.
+                    KeyManager.saveEncryptedPrivateKey(
+                            state.keyPair().getPrivate(), recoveryPath, recoveryPwd);
                 } finally {
                     java.util.Arrays.fill(password, '\0');
+                    java.util.Arrays.fill(recoveryPwd, '\0');
                 }
                 return keystorePath;
             }

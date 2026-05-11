@@ -32,6 +32,12 @@ public final class Launcher {
             e.printStackTrace(System.err);
         });
 
+        // ТЗ 4.5.3: ранняя регистрация Bouncy Castle — до первого обращения
+        // к JCA в любом из режимов (GUI или CLI). Класс CryptoProviders
+        // также содержит дублирующий static-инициализатор в каждом
+        // crypto-классе на случай вызова из тестов в обход Launcher.
+        ru.hse.jblockstorage.crypto.CryptoProviders.register();
+
         if (args.length == 0) {
             log.info("Запуск JBlockStorage в режиме GUI");
             Application.launch(JBlockStorageApp.class, args);

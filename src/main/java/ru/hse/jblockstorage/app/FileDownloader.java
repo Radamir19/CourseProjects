@@ -25,8 +25,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Оркестратор скачивания файла из распределённой сети.
@@ -51,7 +55,7 @@ import java.util.concurrent.TimeoutException;
  * downloader пробует следующего из списка реплик. Это и есть сценарий ТЗ
  * п. 8.2.1: «Узел Б выключен — скачать файл с оставшихся узлов».
  */
-public final class FileDownloader {
+public class FileDownloader {
 
     private static final Logger LOG = LoggerFactory.getLogger(FileDownloader.class);
 
@@ -233,24 +237,13 @@ public final class FileDownloader {
         }
 
         try {
-            // 3. Скачиваем каждый шард, перебирая хранителей
-            byte[][] collectedShards = new byte[orderedShards.size()][];
-            for (int i = 0; i < orderedShards.size(); i++) {
-                String hash = orderedShards.get(i);
-                List<String> storers = shardToStorers.getOrDefault(hash, List.of());
-                // День 15: per-shard уведомления через расширенный fetchShard
-                byte[] data = fetchShard(hash, storers, storerSessions, i, listener);
-                if (data == null) {
-                    IllegalStateException ex = new IllegalStateException(
-                            "Не удалось скачать шард " + hash.substring(0, 16)
-                                    + "… ни от одного из " + storers.size() + " известных хранителей");
-                    if (listener != null) {
-                        try { listener.onFailed(ex); } catch (Exception ignore) {}
-                    }
-                    throw ex;
-                }
-                collectedShards[i] = data;
-            }
+            // 3. Скачиваем шарды ПАРАЛЛЕЛЬНО (ТЗ п. 4.1.1.4.1: «параллельная загрузка
+            //    с нескольких узлов»). Каждый шард — отдельная задача в пуле; внутри
+            //    одной задачи fetchShard сохраняет sequential fallback по хранителям
+            //    (это закрывает сценарий 8.2.1 «Б упал, тянем с В»). Между шардами —
+            //    параллельность: общее время ≈ max(один шард), а не sum.
+            byte[][] collectedShards = fetchAllShardsParallel(
+                    orderedShards, shardToStorers, storerSessions, listener);
 
             // 4. Склейка шифротекста
             int totalLen = 0;
@@ -362,6 +355,96 @@ public final class FileDownloader {
                       Map<String, PeerSession> sessions)
             throws InterruptedException {
         return fetchShard(hashHex, storerNodeIds, sessions, -1, null);
+    }
+
+    /**
+     * Параллельно скачивает все шарды (ТЗ п. 4.1.1.4.1).
+     * Каждый шард обрабатывается в отдельном потоке, общее время ограничено
+     * самым медленным шардом (а не суммой), что критично для больших файлов
+     * (например, 100 шардов по 512 КБ = 100 round-trip'ов в sequential vs
+     * 1 round-trip в parallel). Внутри одного шарда сохранён sequential
+     * fallback по хранителям — это закрывает сценарий ТЗ 8.2.1.
+     *
+     * <p>Размер пула ограничен 16 потоками (этого достаточно даже для
+     * крупных файлов: больший параллелизм упирается в пропускную способность
+     * сети, не в потоки), но не больше числа шардов. Пул с daemon-потоками
+     * — JVM не задержится на их ожидании при выходе.
+     *
+     * @return массив шардов в исходном порядке; для не скачавшихся — {@code null}
+     *         в соответствующей позиции
+     */
+    private byte[][] fetchAllShardsParallel(List<String> orderedShards,
+                                            Map<String, List<String>> shardToStorers,
+                                            Map<String, PeerSession> storerSessions,
+                                            DownloadProgressListener listener)
+            throws InterruptedException {
+        int n = orderedShards.size();
+        int parallelism = Math.min(n, 16);
+
+        AtomicInteger threadCounter = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(parallelism, r -> {
+            Thread t = new Thread(r, "shard-fetch-" + threadCounter.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+
+        List<CompletableFuture<byte[]>> futures = new ArrayList<>(n);
+        try {
+            for (int i = 0; i < n; i++) {
+                final int idx = i;
+                final String hash = orderedShards.get(idx);
+                final List<String> storers = shardToStorers.getOrDefault(hash, List.of());
+
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return fetchShard(hash, storers, storerSessions, idx, listener);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                }, pool));
+            }
+
+            // Ждём, пока ВСЕ задачи завершатся (успешно или с null).
+            // Тайм-аут на отдельный шард уже задан в fetchShard через
+            // SHARD_TIMEOUT_MILLIS на хранителя × число хранителей —
+            // здесь верхней границы не ставим, иначе получим двойной timeout.
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+            } catch (ExecutionException e) {
+                // Внутри supplyAsync мы уже ловим InterruptedException и
+                // возвращаем null — других checked исключений быть не должно.
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                if (cause instanceof RuntimeException re) throw re;
+                throw new RuntimeException("Сбой параллельной загрузки шардов", cause);
+            }
+        } finally {
+            pool.shutdown();
+            // Не ждём termination — пулы с daemon-потоками не блокируют JVM.
+        }
+
+        byte[][] collected = new byte[n][];
+        for (int i = 0; i < n; i++) {
+            byte[] data;
+            try {
+                data = futures.get(i).get();
+            } catch (ExecutionException e) {
+                data = null; // не должно случиться, см. выше
+            }
+            if (data == null) {
+                String hashShort = orderedShards.get(i).substring(0, 16);
+                int storersCount = shardToStorers.getOrDefault(orderedShards.get(i), List.of()).size();
+                IllegalStateException ex = new IllegalStateException(
+                        "Не удалось скачать шард " + hashShort
+                                + "… ни от одного из " + storersCount + " известных хранителей");
+                if (listener != null) {
+                    try { listener.onFailed(ex); } catch (Exception ignore) {}
+                }
+                throw ex;
+            }
+            collected[i] = data;
+        }
+        return collected;
     }
 
     /**

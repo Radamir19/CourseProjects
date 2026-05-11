@@ -17,6 +17,11 @@ public final class Signer {
 
     public static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
 
+    static {
+        // ТЗ 4.5.3: подпись блокчейна выполняется через Bouncy Castle.
+        CryptoProviders.register();
+    }
+
     private Signer() {
         // утилитный класс
     }
@@ -24,7 +29,7 @@ public final class Signer {
     /** Подписывает данные приватным ключом и возвращает «сырую» подпись. */
     public static byte[] sign(byte[] data, PrivateKey privateKey) {
         try {
-            Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM);
+            Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM, CryptoProviders.BC);
             sig.initSign(privateKey);
             sig.update(data);
             return sig.sign();
@@ -40,7 +45,7 @@ public final class Signer {
      */
     public static boolean verify(byte[] data, byte[] signature, PublicKey publicKey) {
         try {
-            Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM);
+            Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM, CryptoProviders.BC);
             sig.initVerify(publicKey);
             sig.update(data);
             return sig.verify(signature);

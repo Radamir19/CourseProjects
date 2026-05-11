@@ -62,6 +62,9 @@ public final class Bip39 {
     private static final Map<String, Integer> WORD_INDEX;
 
     static {
+        // ТЗ 4.5.3: PBKDF2-HMAC-SHA512 и SHA-256 для seed-derivation
+        // выполняются через Bouncy Castle.
+        CryptoProviders.register();
         WORDLIST = loadWordlist();
         if (WORDLIST.size() != 2048) {
             throw new IllegalStateException(
@@ -216,12 +219,13 @@ public final class Bip39 {
         String normPassphrase = Normalizer.normalize(passphrase, Normalizer.Form.NFKD);
         byte[] salt = ("mnemonic" + normPassphrase).getBytes(StandardCharsets.UTF_8);
         try {
-            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512");
+            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512", CryptoProviders.BC);
             PBEKeySpec spec = new PBEKeySpec(password, salt, PBKDF2_ITERATIONS, SEED_BYTES * 8);
             byte[] seed = factory.generateSecret(spec).getEncoded();
             spec.clearPassword();
             return seed;
-        } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+        } catch (NoSuchAlgorithmException | InvalidKeySpecException
+                 | java.security.NoSuchProviderException e) {
             throw new IllegalStateException("PBKDF2WithHmacSHA512 недоступен", e);
         } finally {
             Arrays.fill(password, '\0');
@@ -273,8 +277,8 @@ public final class Bip39 {
 
     private static byte[] sha256(byte[] data) {
         try {
-            return MessageDigest.getInstance("SHA-256").digest(data);
-        } catch (NoSuchAlgorithmException e) {
+            return MessageDigest.getInstance("SHA-256", CryptoProviders.BC).digest(data);
+        } catch (NoSuchAlgorithmException | java.security.NoSuchProviderException e) {
             throw new IllegalStateException("SHA-256 недоступен", e);
         }
     }

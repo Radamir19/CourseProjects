@@ -358,16 +358,9 @@ public final class LoginView {
     }
 
     private void onRestore() {
-        // Заглушка — экран восстановления по seed-фразе появится позже.
-        PlaceholderView placeholder = new PlaceholderView(
-                context,
-                "Восстановление по фразе",
-                "Этот экран будет готов в следующей итерации.\n\n"
-                        + "Здесь вы сможете ввести 12 слов seed-фразы и задать "
-                        + "новый пароль для keystore.",
-                this::backToWelcome
-        );
-        context.router().show(placeholder.getRoot(), "JBlockStorage — Восстановление");
+        // ТЗ 4.1.5.1: восстановление профиля по BIP-39 seed-фразе.
+        RestoreView restore = new RestoreView(context);
+        context.router().show(restore.getRoot(), "JBlockStorage — Восстановление");
     }
 
     private void backToWelcome() {

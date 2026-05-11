@@ -1,8 +1,8 @@
 package ru.hse.jblockstorage.crypto;
 
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 /**
@@ -15,6 +15,11 @@ import java.util.HexFormat;
 public final class CryptoUtils {
 
     private static final HexFormat HEX = HexFormat.of();
+
+    static {
+        // ТЗ 4.5.3: SHA-256 для дерева Меркла берём из Bouncy Castle.
+        CryptoProviders.register();
+    }
 
     private CryptoUtils() {
         // утилитный класс
@@ -35,10 +40,10 @@ public final class CryptoUtils {
      */
     public static byte[] applySha256(byte[] input) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            MessageDigest digest = MessageDigest.getInstance("SHA-256", CryptoProviders.BC);
             return digest.digest(input);
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 гарантированно есть в любой стандартной JRE.
+        } catch (GeneralSecurityException e) {
+            // SHA-256 гарантированно есть в Bouncy Castle.
             throw new IllegalStateException("SHA-256 не доступен в данной JRE", e);
         }
     }

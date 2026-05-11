@@ -428,6 +428,18 @@ public final class UploadDialog {
             previewSlot.getChildren().add(buildPreview(size));
             return;
         }
+        // ТЗ 4.1.2: ограничение 5 ГБ. Дублируем проверку из FileUploader
+        // здесь, чтобы пользователь увидел понятное сообщение ДО того, как
+        // нажмёт «Загрузить» и получит исключение.
+        if (size > FileUploader.MAX_FILE_SIZE_BYTES) {
+            uploadBtn.setDisable(true);
+            warnSlot.getChildren().add(banner(
+                    "Файл превышает максимально допустимый размер 5 ГБ. "
+                            + "Текущая версия протокола не поддерживает "
+                            + "более крупные файлы.", true));
+            previewSlot.getChildren().add(buildPreview(size));
+            return;
+        }
         previewSlot.getChildren().add(buildPreview(size));
 
         // 2. Сводка
