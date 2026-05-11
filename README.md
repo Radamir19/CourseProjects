@@ -69,6 +69,17 @@ rm -rf ~/.jblockstorage-*/data
 
 ---
 
+## Документация
+
+```bash
+# Javadoc (Текст программы)
+./gradlew javadoc
+open build/docs/javadoc/index.html
+
+# Отчёт по тестам
+open build/reports/tests/test/index.html
+```
+
 ## Тесты
 
 ```bash
